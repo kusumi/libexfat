@@ -1,0 +1,15 @@
+[package]
+name = "libexfat"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bytemuck = { version = "1.15.0", features = ["derive"] }
+byteorder = "1.5.0"
+getopts = "0.2.21"
+libc = "0.2.155"
+log = "0.4.21"
+nix = { version = "0.29.0", features = ["fs", "ioctl", "user"] }
+time = { version = "0.3.36", features = ["local-offset"] }
