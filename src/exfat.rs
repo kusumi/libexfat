@@ -25,8 +25,8 @@ macro_rules! get_mut_node {
 pub(crate) use get_mut_node;
 
 macro_rules! error_or_panic {
-    ($msg:expr, $debug:expr) => {
-        if $debug {
+    ($msg:expr, $cond:expr) => {
+        if $cond {
             panic!("{}", $msg);
         } else {
             log::error!("{}", $msg);
@@ -96,9 +96,10 @@ impl ExfatCursor {
 #[derive(Debug, Default)]
 pub(crate) struct ExfatClusterMap {
     start_cluster: u32,
-    size: u32, // in bits
+    pub(crate) count: u32,
     pub(crate) chunk: Vec<bitmap::Bitmap>,
-    chunk_size: u32, // in bits
+    #[cfg(feature = "bitmap_u64")]
+    pub(crate) bytes: Vec<u8>,
     dirty: bool,
 }
 
@@ -110,9 +111,26 @@ impl ExfatClusterMap {
     }
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct ExfatNidMap {
+    pub(crate) next: node::Nid,
+    pub(crate) max: node::Nid,
+    pub(crate) pool: Vec<node::Nid>,
+    pub(crate) chunk: Vec<bitmap::Bitmap>,
+}
+
+impl ExfatNidMap {
+    fn new() -> Self {
+        Self {
+            next: node::NID_NODE_OFFSET,
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Exfat {
-    opt: option::ExfatOption, // Rust
+    pub(crate) opt: option::ExfatOption, // Rust
     pub(crate) dev: device::ExfatDevice,
     pub(crate) sb: exfatfs::ExfatSuperBlock,
     upcase: Vec<u16>,
@@ -122,7 +140,7 @@ pub struct Exfat {
     pub(crate) ro: isize,
     pub(crate) errors: usize,       // global variable in relan/exfat
     pub(crate) errors_fixed: usize, // global variable in relan/exfat
-    pub(crate) nid_next: node::Nid, // Rust (should be bitmamp, but large enough)
+    pub(crate) imap: ExfatNidMap,   // Rust
     pub(crate) nmap: std::collections::HashMap<node::Nid, node::ExfatNode>, // Rust
 }
 
@@ -149,7 +167,7 @@ impl Exfat {
             ro: 0,
             errors: 0,
             errors_fixed: 0,
-            nid_next: node::NID_ROOT + 1,
+            imap: ExfatNidMap::new(),
             nmap: std::collections::HashMap::new(),
         }
     }
@@ -165,7 +183,7 @@ impl Exfat {
             cluster >= exfatfs::EXFAT_FIRST_DATA_CLUSTER,
             "invalid cluster number {cluster}"
         );
-        u64::from_le(self.sb.cluster_sector_start.into())
+        u64::from(u32::from_le(self.sb.cluster_sector_start))
             + (u64::from(cluster - exfatfs::EXFAT_FIRST_DATA_CLUSTER) << self.sb.spc_bits)
     }
 
@@ -176,7 +194,7 @@ impl Exfat {
     }
 
     // Sector to cluster.
-    fn s2c(&mut self, sector: u64) -> nix::Result<u32> {
+    fn s2c(&self, sector: u64) -> nix::Result<u32> {
         // dumpexfat (the only user of this fn) initially passes zero,
         // and relan/exfat returns a negative cluster in uint32_t.
         // It's a bug, but usually works as the value exceeds max clusters.
@@ -195,7 +213,7 @@ impl Exfat {
     }
 
     // Size in bytes to size in clusters (rounded upwards).
-    fn bytes2clusters(&mut self, bytes: u64) -> nix::Result<u32> {
+    fn bytes2clusters(&self, bytes: u64) -> nix::Result<u32> {
         match util::div_round_up!(bytes, self.get_cluster_size()).try_into() {
             Ok(v) => Ok(v),
             Err(e) => {
@@ -219,7 +237,7 @@ impl Exfat {
         if get_node!(self.nmap, &nid).is_contiguous {
             return cluster + 1;
         }
-        let fat_offset = self.s2o(u64::from_le(self.sb.fat_sector_start.into()))
+        let fat_offset = self.s2o(u32::from_le(self.sb.fat_sector_start).into())
             + u64::from(cluster) * exfatfs::EXFAT_CLUSTER_SIZE_U64;
         let next = match self.dev.preadx(exfatfs::EXFAT_CLUSTER_SIZE_U64, fat_offset) {
             Ok(v) => v,
@@ -250,13 +268,8 @@ impl Exfat {
         Ok(node.fptr_cluster)
     }
 
-    fn ffas(bitmap: &mut [bitmap::Bitmap], start: u32, end: u32) -> nix::Result<u32> {
-        let index = bitmap::bmap_find_and_set(bitmap, start, end);
-        if index == u32::MAX {
-            Err(nix::errno::Errno::ENOSPC)
-        } else {
-            Ok(exfatfs::EXFAT_FIRST_DATA_CLUSTER + index)
-        }
+    pub fn flush_nodes(&mut self) -> nix::Result<()> {
+        self.flush_nodes_impl(node::NID_ROOT)
     }
 
     fn flush_nodes_impl(&mut self, nid: node::Nid) -> nix::Result<()> {
@@ -270,16 +283,10 @@ impl Exfat {
         self.flush_node(nid)
     }
 
-    pub fn flush_nodes(&mut self) -> nix::Result<()> {
-        self.flush_nodes_impl(node::NID_ROOT)
-    }
-
     pub fn flush(&mut self) -> nix::Result<()> {
         if self.cmap.dirty {
-            if let Err(e) = self.dev.pwrite(
-                &self.cmap.chunk, // XXX works only when bitmap::Bitmap is u8
-                self.c2o(self.cmap.start_cluster),
-            ) {
+            let offset = self.c2o(self.cmap.start_cluster);
+            if let Err(e) = self.dev.pwrite(self.cmap.get(), offset) {
                 log::error!("failed to write clusters bitmap");
                 return Err(util::error2errno(e));
             }
@@ -307,16 +314,16 @@ impl Exfat {
             hint = 0;
         } else {
             hint -= exfatfs::EXFAT_FIRST_DATA_CLUSTER;
-            if hint >= self.cmap.chunk_size {
+            if hint >= self.cmap.count {
                 hint = 0;
             }
         }
-        let cluster = match Self::ffas(&mut self.cmap.chunk, hint, self.cmap.chunk_size) {
+        let cluster = match self.ffas_cluster(hint, self.cmap.count) {
             Ok(v) => v,
-            Err(nix::errno::Errno::ENOSPC) => match Self::ffas(&mut self.cmap.chunk, 0, hint) {
+            Err(nix::errno::Errno::ENOSPC) => match self.ffas_cluster(0, hint) {
                 Ok(v) => v,
                 Err(nix::errno::Errno::ENOSPC) => {
-                    log::error!("no free space left");
+                    log::error!("no free space left for cluster");
                     return Err(nix::errno::Errno::ENOSPC);
                 }
                 Err(e) => return Err(e),
@@ -329,12 +336,12 @@ impl Exfat {
 
     fn free_cluster(&mut self, cluster: u32) {
         assert!(
-            cluster - exfatfs::EXFAT_FIRST_DATA_CLUSTER < self.cmap.size,
+            cluster - exfatfs::EXFAT_FIRST_DATA_CLUSTER < self.cmap.count,
             "caller must check cluster validity ({:#x},{:#x})",
             cluster,
-            self.cmap.size
+            self.cmap.count
         );
-        bitmap::bmap_clr(
+        bitmap::clear(
             &mut self.cmap.chunk,
             (cluster - exfatfs::EXFAT_FIRST_DATA_CLUSTER)
                 .try_into()
@@ -541,15 +548,15 @@ impl Exfat {
     #[must_use]
     pub fn get_free_clusters(&self) -> u32 {
         let mut free_clusters = 0;
-        for i in 0..self.cmap.size.try_into().unwrap() {
-            if bitmap::bmap_get(&self.cmap.chunk, i) == 0 {
+        for i in 0..self.cmap.count.try_into().unwrap() {
+            if bitmap::get(&self.cmap.chunk, i) == 0 {
                 free_clusters += 1;
             }
         }
         free_clusters
     }
 
-    fn find_used_clusters(&mut self, a: &mut u32, b: &mut u32) -> nix::Result<bool> {
+    fn find_used_clusters(&self, a: &mut u32, b: &mut u32) -> nix::Result<bool> {
         let end = u32::from_le(self.sb.cluster_count);
         let mut va;
         let mut vb = *b;
@@ -564,7 +571,7 @@ impl Exfat {
                     return Err(nix::errno::Errno::EINVAL);
                 }
             };
-            if bitmap::bmap_get(&self.cmap.chunk, i) != 0 {
+            if bitmap::get(&self.cmap.chunk, i) != 0 {
                 break;
             }
             va += 1;
@@ -584,7 +591,7 @@ impl Exfat {
                     return Err(nix::errno::Errno::EINVAL);
                 }
             };
-            if bitmap::bmap_get(&self.cmap.chunk, i) == 0 {
+            if bitmap::get(&self.cmap.chunk, i) == 0 {
                 vb -= 1;
                 break;
             }
@@ -594,7 +601,7 @@ impl Exfat {
         Ok(true)
     }
 
-    pub fn find_used_sectors(&mut self, a: &mut u64, b: &mut u64) -> nix::Result<bool> {
+    pub fn find_used_sectors(&self, a: &mut u64, b: &mut u64) -> nix::Result<bool> {
         let (mut ca, mut cb) = if *a == 0 && *b == 0 {
             (
                 exfatfs::EXFAT_FIRST_DATA_CLUSTER - 1,
@@ -779,7 +786,7 @@ impl Exfat {
         Err(nix::errno::Errno::EIO)
     }
 
-    fn check_entries(&mut self, entry: &[exfatfs::ExfatEntry], n: usize) -> bool {
+    fn check_entries(&self, entry: &[exfatfs::ExfatEntry], n: usize) -> bool {
         const EXFAT_ENTRY_FILE_I32: i32 = exfatfs::EXFAT_ENTRY_FILE as i32;
         const EXFAT_ENTRY_FILE_INFO_I32: i32 = exfatfs::EXFAT_ENTRY_FILE_INFO as i32;
         const EXFAT_ENTRY_FILE_NAME_I32: i32 = exfatfs::EXFAT_ENTRY_FILE_NAME as i32;
@@ -967,9 +974,8 @@ impl Exfat {
         node.init_meta1(meta1);
         node.init_meta2(meta2);
         node.init_name(&entries[2..], usize::from(mandatory_entries) - 2);
-        assert!(node.is_valid());
-        let nid = node.nid;
-        self.nmap_attach(dnid, node);
+        let nid = self.nmap_attach(dnid, node)?;
+        assert!(get_node!(self.nmap, &nid).is_valid());
 
         if !self.check_node(nid, util::calc_checksum(entries, n), meta1) {
             return Err(nix::errno::Errno::EIO);
@@ -1117,23 +1123,21 @@ impl Exfat {
             return Err(nix::errno::Errno::EIO);
         }
 
-        self.cmap.size = u32::from_le(self.sb.cluster_count);
-        if u64::from_le(bitmap.size) < util::div_round_up!(u64::from(self.cmap.size), 8) {
+        // bitmap can be rather big, up to 512 MB
+        self.cmap.count = u32::from_le(self.sb.cluster_count);
+        if u64::from_le(bitmap.size) < util::div_round_up!(u64::from(self.cmap.count), 8) {
             log::error!(
                 "invalid clusters bitmap size: {} (expected at least {})",
                 u64::from_le(bitmap.size),
-                util::div_round_up!(self.cmap.size, 8)
+                util::div_round_up!(self.cmap.count, 8)
             );
             return Err(nix::errno::Errno::EIO);
         }
-        // bitmap can be rather big, up to 512 MB
-        self.cmap.chunk_size = self.cmap.size;
 
-        let buf_size = bitmap::bmap_size(self.cmap.chunk_size.try_into().unwrap())
+        let buf_size = bitmap::size(self.cmap.count.try_into().unwrap())
             .try_into()
             .unwrap();
-        // XXX works only when bitmap::Bitmap is u8
-        self.cmap.chunk = match self.dev.preadx(buf_size, self.c2o(self.cmap.start_cluster)) {
+        let buf = match self.dev.preadx(buf_size, self.c2o(self.cmap.start_cluster)) {
             Ok(v) => v,
             Err(e) => {
                 log::error!(
@@ -1144,6 +1148,7 @@ impl Exfat {
                 return Err(util::error2errno(e));
             }
         };
+        self.cmap.set(buf);
         Ok(())
     }
 
@@ -1157,7 +1162,7 @@ impl Exfat {
             EXFAT_UTF8_ENAME_BUFFER_MAX,
             exfatfs::EXFAT_ENAME_MAX,
         )?;
-        self.init_strlabel(&output);
+        self.init_label(&output);
         Ok(())
     }
 
@@ -1189,17 +1194,39 @@ impl Exfat {
         Ok(())
     }
 
-    fn nmap_attach(&mut self, dnid: node::Nid, mut node: node::ExfatNode) {
+    fn nmap_attach(
+        &mut self,
+        dnid: node::Nid,
+        mut node: node::ExfatNode,
+    ) -> nix::Result<node::Nid> {
+        assert_eq!(node.nid, node::NID_INVALID);
+        node.nid = self.get_nid()?;
+        self.nmap_attach_node(dnid, node)
+    }
+
+    fn nmap_attach_node(
+        &mut self,
+        dnid: node::Nid,
+        mut node: node::ExfatNode,
+    ) -> nix::Result<node::Nid> {
         assert_ne!(dnid, node::NID_INVALID);
         assert_ne!(node.nid, node::NID_INVALID);
         assert_ne!(node.nid, node::NID_ROOT); // root directly uses nmap
         let dnode = get_mut_node!(self.nmap, &dnid);
         node.pnid = dnode.nid;
         dnode.cnids.push(node.nid);
+        let nid = node.nid;
         assert!(self.nmap.insert(node.nid, node).is_none());
+        Ok(nid)
     }
 
     fn nmap_detach(&mut self, dnid: node::Nid, nid: node::Nid) -> node::ExfatNode {
+        let node = self.nmap_detach_node(dnid, nid);
+        self.put_nid(nid);
+        node
+    }
+
+    fn nmap_detach_node(&mut self, dnid: node::Nid, nid: node::Nid) -> node::ExfatNode {
         assert_ne!(dnid, node::NID_INVALID);
         assert_ne!(nid, node::NID_INVALID);
         assert_ne!(nid, node::NID_ROOT); // root directly uses nmap
@@ -1212,10 +1239,14 @@ impl Exfat {
         node
     }
 
-    fn reset_cache_impl(&mut self, nid: node::Nid) {
+    fn reset_cache(&mut self) -> nix::Result<()> {
+        self.reset_cache_impl(node::NID_ROOT)
+    }
+
+    fn reset_cache_impl(&mut self, nid: node::Nid) -> nix::Result<()> {
         while !get_node!(self.nmap, &nid).cnids.is_empty() {
             let cnid = get_node!(self.nmap, &nid).cnids[0];
-            self.reset_cache_impl(cnid);
+            self.reset_cache_impl(cnid)?;
             self.nmap_detach(nid, cnid);
         }
         let node = get_mut_node!(self.nmap, &nid);
@@ -1235,10 +1266,7 @@ impl Exfat {
         while node.references > 0 {
             node.put();
         }
-    }
-
-    fn reset_cache(&mut self) {
-        self.reset_cache_impl(node::NID_ROOT);
+        Ok(())
     }
 
     pub fn flush_node(&mut self, nid: node::Nid) -> nix::Result<()> {
@@ -1465,11 +1493,11 @@ impl Exfat {
         // build a bitmap of valid entries in the directory
         // relan/exfat: why calloc(..., sizeof(bitmap_t)) ?
         let nentries = usize::try_from(dnode.size).unwrap() / exfatfs::EXFAT_ENTRY_SIZE;
-        let mut dmap = bitmap::bmap_alloc(nentries);
+        let mut dmap = bitmap::alloc(nentries);
         for cnid in &dnode.cnids {
             let node = get_node!(self.nmap, cnid);
             for i in 0..=node.continuations {
-                bitmap::bmap_set(
+                bitmap::set(
                     &mut dmap,
                     usize::try_from(node.entry_offset).unwrap() / exfatfs::EXFAT_ENTRY_SIZE
                         + usize::from(i),
@@ -1482,7 +1510,7 @@ impl Exfat {
         let mut contiguous = 0;
         let mut i = 0;
         while i < nentries {
-            if bitmap::bmap_get(&dmap, i) == 0 {
+            if bitmap::get(&dmap, i) == 0 {
                 if contiguous == 0 {
                     offset = u64::try_from(i).unwrap() * exfatfs::EXFAT_ENTRY_SIZE_U64;
                 }
@@ -1534,7 +1562,7 @@ impl Exfat {
 
         let meta1: &mut exfatfs::ExfatEntryMeta1 = bytemuck::cast_mut(&mut entries[0]);
         meta1.typ = exfatfs::EXFAT_ENTRY_FILE;
-        meta1.continuations = 1 + u8::try_from(name_entries).unwrap();
+        meta1.continuations = (1 + name_entries).try_into().unwrap();
         meta1.attrib = attrib.to_le();
         let (date, time, centisec, tzoffset) = time::unix2exfat(util::get_current_time());
         meta1.adate = date;
@@ -1576,9 +1604,8 @@ impl Exfat {
         node.init_meta1(bytemuck::cast_ref(&entries[0]));
         node.init_meta2(bytemuck::cast_ref(&entries[1]));
         node.init_name(&entries[2..], name_entries);
-        assert!(node.is_valid());
-        let nid = node.nid;
-        self.nmap_attach(dnid, node);
+        let nid = self.nmap_attach(dnid, node)?;
+        assert!(get_node!(self.nmap, &nid).is_valid());
         Ok(nid)
     }
 
@@ -1667,7 +1694,7 @@ impl Exfat {
         nid: node::Nid,
         name: &[u16],
         new_offset: u64,
-    ) -> nix::Result<()> {
+    ) -> nix::Result<node::Nid> {
         let name_length = utf::utf16_length(name);
         let name_entries = util::div_round_up!(name_length, exfatfs::EXFAT_ENAME_MAX);
 
@@ -1678,7 +1705,7 @@ impl Exfat {
         assert_eq!(entries.len(), 2 + name_entries);
 
         let meta1: &mut exfatfs::ExfatEntryMeta1 = bytemuck::cast_mut(&mut entries[0]);
-        meta1.continuations = 1 + u8::try_from(name_entries).unwrap();
+        meta1.continuations = (1 + name_entries).try_into().unwrap();
 
         let meta2: &mut exfatfs::ExfatEntryMeta2 = bytemuck::cast_mut(&mut entries[1]);
         meta2.name_length = name_length.try_into().unwrap();
@@ -1687,7 +1714,7 @@ impl Exfat {
         self.erase_node(nid)?;
         let node = get_mut_node!(self.nmap, &nid);
         node.entry_offset = new_offset;
-        node.continuations = 1 + u8::try_from(name_entries).unwrap();
+        node.continuations = (1 + name_entries).try_into().unwrap();
 
         for i in 0..name_entries {
             let name_entry: &mut exfatfs::ExfatEntryName = bytemuck::cast_mut(&mut entries[2 + i]);
@@ -1709,9 +1736,9 @@ impl Exfat {
         assert!(node.is_valid());
 
         // update pnid / cnids to move nid from old_dnid to new_dnid
-        let node = self.nmap_detach(old_dnid, nid);
-        self.nmap_attach(new_dnid, node);
-        Ok(())
+        let node = self.nmap_detach_node(old_dnid, nid);
+        assert_eq!(node.nid, nid);
+        self.nmap_attach_node(new_dnid, node)
     }
 
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> nix::Result<node::Nid> {
@@ -1780,10 +1807,13 @@ impl Exfat {
                 return Err(e);
             }
         };
-        if let Err(e) = self.rename_entry(old_dnid, dnid, nid, &name, offset) {
-            get_mut_node!(self.nmap, &dnid).put();
-            get_mut_node!(self.nmap, &nid).put();
-            return Err(e);
+        match self.rename_entry(old_dnid, dnid, nid, &name, offset) {
+            Ok(v) => assert_eq!(v, nid),
+            Err(e) => {
+                get_mut_node!(self.nmap, &dnid).put();
+                get_mut_node!(self.nmap, &nid).put();
+                return Err(e);
+            }
         }
         if let Err(e) = self.flush_node(dnid) {
             get_mut_node!(self.nmap, &dnid).put();
@@ -1830,12 +1860,7 @@ impl Exfat {
         }
     }
 
-    #[must_use]
-    pub fn get_label(&self) -> &str {
-        &self.strlabel
-    }
-
-    fn find_label(&mut self) -> nix::Result<u64> {
+    fn find_label_entry(&mut self) -> nix::Result<u64> {
         let mut offset = 0;
         loop {
             let entry = &self.read_entries(node::NID_ROOT, 1, offset)?[0];
@@ -1850,7 +1875,7 @@ impl Exfat {
         let label = label.as_bytes();
         let label_utf16 = utf::utf8_to_utf16(label, exfatfs::EXFAT_ENAME_MAX, label.len())?;
 
-        let offset = match self.find_label() {
+        let offset = match self.find_label_entry() {
             Ok(v) => v,
             Err(nix::errno::Errno::ENOENT) => self.find_slot(node::NID_ROOT, 1)?,
             Err(e) => return Err(e),
@@ -1866,7 +1891,7 @@ impl Exfat {
 
         let entry: &exfatfs::ExfatEntry = bytemuck::cast_ref(&entry);
         self.write_entries(node::NID_ROOT, &[*entry], 1, offset)?;
-        self.init_strlabel(label);
+        self.init_label(label);
         Ok(())
     }
 
@@ -1913,7 +1938,7 @@ impl Exfat {
         }
     }
 
-    fn compare_char(&self, a: u16, b: u16) -> bool {
+    fn compare_name_char(&self, a: u16, b: u16) -> bool {
         self.upcase[usize::from(a)] == self.upcase[usize::from(b)]
     }
 
@@ -1922,7 +1947,7 @@ impl Exfat {
         assert_ne!(b.len(), 0);
         let mut i = 0;
         while i < a.len() && i < b.len() {
-            if !self.compare_char(u16::from_le(a[i]), u16::from_le(b[i])) {
+            if !self.compare_name_char(u16::from_le(a[i]), u16::from_le(b[i])) {
                 return false;
             }
             i += 1;
@@ -2050,6 +2075,10 @@ impl Exfat {
         panic!("impossible");
     }
 
+    fn ask_to_fix(&self) -> bool {
+        Exfat::ask_to_fix_(&self.opt.repair)
+    }
+
     fn ask_to_fix_(repair: &option::ExfatRepair) -> bool {
         let question = "Fix (Y/N)?";
         match repair {
@@ -2058,32 +2087,24 @@ impl Exfat {
                 println!("{question} Y");
                 true
             }
-            option::ExfatRepair::Ask => {
-                let mut yeah;
-                loop {
-                    print!("{question} ");
-                    std::io::stdout().flush().unwrap();
-                    let s = match util::read_line() {
-                        Ok(v) => v.to_uppercase(),
-                        Err(e) => {
-                            eprintln!("{e}");
-                            continue;
-                        }
-                    };
-                    let answer = s.trim_end();
-                    yeah = answer == "Y";
-                    let nope = answer == "N";
-                    if yeah || nope {
-                        break;
+            option::ExfatRepair::Ask => loop {
+                print!("{question} ");
+                std::io::stdout().flush().unwrap();
+                let s = match util::read_line() {
+                    Ok(v) => v.to_uppercase(),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        continue;
                     }
+                };
+                let answer = s.trim_end();
+                let yeah = answer == "Y";
+                let nope = answer == "N";
+                if yeah || nope {
+                    break yeah;
                 }
-                yeah
-            }
+            },
         }
-    }
-
-    fn ask_to_fix(&self) -> bool {
-        Exfat::ask_to_fix_(&self.opt.repair)
     }
 
     fn fix_invalid_vbr_checksum(&mut self, vbr_checksum: u32) -> nix::Result<()> {
@@ -2311,10 +2332,12 @@ impl Exfat {
                 ef.dev.get_size()
             );
         }
-        if u64::from_le(ef.sb.cluster_count.into()) * ef.get_cluster_size() > ef.dev.get_size() {
+        let clusters_heap_size =
+            u64::from(u32::from_le(ef.sb.cluster_count)) * ef.get_cluster_size();
+        if clusters_heap_size > ef.dev.get_size() {
             log::error!(
                 "file system in clusters is larger than device: {} * {} > {}",
-                u64::from_le(ef.sb.cluster_count.into()),
+                u32::from_le(ef.sb.cluster_count),
                 ef.get_cluster_size(),
                 ef.dev.get_size()
             );
@@ -2324,11 +2347,26 @@ impl Exfat {
             log::warn!("volume was not unmounted cleanly");
         }
 
+        // Rust
+        match ef.opt.nidalloc {
+            option::ExfatNidAlloc::Linear => ef.imap.max = node::Nid::MAX - 1,
+            option::ExfatNidAlloc::Bitmap => {
+                // n is large enough that cluster allocation should fail first
+                let n = bitmap::round_up(
+                    usize::try_from(clusters_heap_size).unwrap() / (exfatfs::EXFAT_ENTRY_SIZE * 3),
+                );
+                log::debug!("imap: {} bits, {} bytes", n, bitmap::size(n));
+                ef.imap.chunk = bitmap::alloc(n);
+                assert_eq!(bitmap::count(&ef.imap.chunk), 0);
+                ef.imap.max = (n - 1).try_into().unwrap();
+            }
+        }
+
         let root = node::ExfatNode::new_root();
         assert_eq!(root.nid, node::NID_ROOT);
         assert_eq!(root.pnid, node::NID_INVALID);
         let nid = root.nid;
-        assert!(ef.nmap.insert(nid, root).is_none());
+        ef.insert_root_node(root);
 
         let root = get_mut_node!(ef.nmap, &nid);
         root.attrib = exfatfs::EXFAT_ATTRIB_DIR;
@@ -2337,7 +2375,7 @@ impl Exfat {
         let valid_size = match ef.rootdir_size() {
             Ok(v) => v,
             Err(e) => {
-                assert!(ef.nmap.remove(&nid).is_some());
+                ef.remove_root_node();
                 return Err(e);
             }
         };
@@ -2352,22 +2390,22 @@ impl Exfat {
 
         if let Err(e) = ef.cache_directory(nid) {
             get_mut_node!(ef.nmap, &nid).put();
-            ef.reset_cache();
-            assert!(ef.nmap.remove(&nid).is_some());
+            ef.reset_cache()?;
+            ef.remove_root_node();
             return Err(e);
         }
         if ef.upcase.is_empty() {
             log::error!("upcase table is not found");
             get_mut_node!(ef.nmap, &nid).put();
-            ef.reset_cache();
-            assert!(ef.nmap.remove(&nid).is_some());
+            ef.reset_cache()?;
+            ef.remove_root_node();
             return Err(nix::errno::Errno::EIO);
         }
         if ef.cmap.chunk.is_empty() {
             log::error!("clusters bitmap is not found");
             get_mut_node!(ef.nmap, &nid).put();
-            ef.reset_cache();
-            assert!(ef.nmap.remove(&nid).is_some());
+            ef.reset_cache()?;
+            ef.remove_root_node();
             return Err(nix::errno::Errno::EIO);
         }
         Ok(ef)
@@ -2395,11 +2433,20 @@ impl Exfat {
         self.flush_nodes()?;
         self.flush()?;
         get_mut_node!(self.nmap, &node::NID_ROOT).put();
-        self.reset_cache();
+        self.reset_cache()?;
         self.dump_nmap();
-        assert!(self.nmap.remove(&node::NID_ROOT).is_some());
-        assert!(self.nmap.is_empty());
+        self.remove_root_node();
         self.finalize_super_block()?;
+        // Rust
+        match self.opt.nidalloc {
+            option::ExfatNidAlloc::Linear => {
+                assert!(self.imap.pool.is_empty());
+                assert!(self.imap.chunk.is_empty());
+            }
+            option::ExfatNidAlloc::Bitmap => {
+                log::debug!("imap: {} pool entries", self.imap.pool.len());
+            }
+        }
         Ok(())
     }
 

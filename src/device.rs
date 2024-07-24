@@ -158,8 +158,8 @@ fn open(spec: &str, mode: option::ExfatMode) -> std::io::Result<ExfatDevice> {
     }
 
     let (mut fp, mode) = match mode {
-        option::ExfatMode::Ro => (open_ro(spec)?, mode),
         option::ExfatMode::Rw => (open_rw(spec)?, mode),
+        option::ExfatMode::Ro => (open_ro(spec)?, mode),
         option::ExfatMode::Any => {
             if let Ok(v) = open_rw(spec) {
                 (v, option::ExfatMode::Rw)

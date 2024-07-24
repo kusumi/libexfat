@@ -1,4 +1,4 @@
-lib:
+bin:
 	cargo build --release
 clean:
 	cargo clean

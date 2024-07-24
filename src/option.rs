@@ -15,6 +15,12 @@ pub(crate) enum ExfatRepair {
 }
 
 #[derive(Debug)]
+pub(crate) enum ExfatNidAlloc {
+    Linear,
+    Bitmap,
+}
+
+#[derive(Debug)]
 pub(crate) struct ExfatOption {
     pub(crate) mode: ExfatMode,
     pub(crate) repair: ExfatRepair,
@@ -23,6 +29,7 @@ pub(crate) struct ExfatOption {
     pub(crate) fmask: exfat::ExfatStatMode,
     pub(crate) uid: u32,
     pub(crate) gid: u32,
+    pub(crate) nidalloc: ExfatNidAlloc,
     pub(crate) debug: bool,
 }
 
@@ -37,6 +44,7 @@ impl ExfatOption {
         opts.optopt("", "fmask", "", "<octal_number>");
         opts.optopt("", "uid", "", "<number>");
         opts.optopt("", "gid", "", "<number>");
+        opts.optopt("", "nidalloc", "", "<linear|bitmap>");
         opts.optflag("h", "help", "");
         opts.optflag("", "debug", "");
         opts
@@ -74,7 +82,6 @@ impl ExfatOption {
             None => ExfatRepair::No,
         };
         let noatime = matches.opt_present("noatime");
-        // XXX relan/exfat allows 0 prefix
         let umask = match matches.opt_str("umask") {
             Some(v) => match exfat::ExfatStatMode::from_str_radix(&v, 8) {
                 Ok(v) => v,
@@ -125,6 +132,15 @@ impl ExfatOption {
             },
             None => nix::unistd::getegid().as_raw(),
         };
+        let nidalloc = match matches.opt_str("nidalloc") {
+            Some(v) => match v.as_str() {
+                "linear" => ExfatNidAlloc::Linear,
+                "bitmap" => ExfatNidAlloc::Bitmap,
+                _ => return Err(nix::errno::Errno::EINVAL),
+            },
+            None => ExfatNidAlloc::Linear,
+        };
+
         let debug = matches.opt_present("debug");
         Ok(Self {
             mode,
@@ -134,6 +150,7 @@ impl ExfatOption {
             fmask,
             uid,
             gid,
+            nidalloc,
             debug,
         })
     }
@@ -278,6 +295,31 @@ mod tests {
 
         match super::ExfatOption::new(&[]) {
             Ok(v) => assert_eq!(v.gid, nix::unistd::getegid().as_raw()),
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    #[test]
+    fn test_opt_nidalloc() {
+        match super::ExfatOption::new(&["--nidalloc", "linear"]) {
+            Ok(v) => match v.nidalloc {
+                super::ExfatNidAlloc::Linear => (),
+                v @ super::ExfatNidAlloc::Bitmap => panic!("{v:?}"),
+            },
+            Err(e) => panic!("{e}"),
+        }
+
+        match super::ExfatOption::new(&["--nidalloc", "bitmap"]) {
+            Ok(v) => match v.nidalloc {
+                super::ExfatNidAlloc::Bitmap => (),
+                v @ super::ExfatNidAlloc::Linear => panic!("{v:?}"),
+            },
+            Err(e) => panic!("{e}"),
+        }
+
+        match super::ExfatOption::new(&["--nidalloc", "xxx"]) {
+            Ok(v) => panic!("{v:?}"),
+            Err(nix::errno::Errno::EINVAL) => (),
             Err(e) => panic!("{e}"),
         }
     }

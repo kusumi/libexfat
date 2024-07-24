@@ -1,4 +1,4 @@
-libexfat ([v0.1.0](https://github.com/kusumi/libexfat/releases/tag/v0.1.0))
+libexfat ([v0.2.0](https://github.com/kusumi/libexfat/releases/tag/v0.2.0))
 ========
 
 ## About

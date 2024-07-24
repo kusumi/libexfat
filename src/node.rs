@@ -6,8 +6,9 @@ use crate::util;
 
 pub type Nid = u64;
 
-pub(crate) const NID_ROOT: Nid = 1;
 pub(crate) const NID_INVALID: Nid = 0;
+pub(crate) const NID_ROOT: Nid = 1;
+pub(crate) const NID_NODE_OFFSET: Nid = 2;
 
 #[derive(Debug)]
 pub struct ExfatNode {
@@ -26,7 +27,7 @@ pub struct ExfatNode {
     pub(crate) mtime: u64,
     pub(crate) atime: u64,
     pub(crate) name: Vec<u16>,
-    strname: String,
+    strname: String,            // Rust
     pub(crate) nid: Nid,        // Rust
     pub(crate) pnid: Nid,       // Rust
     pub(crate) cnids: Vec<Nid>, // Rust
