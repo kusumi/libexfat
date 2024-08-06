@@ -29,7 +29,7 @@ pub(crate) fn block(index: usize) -> usize {
 }
 
 pub(crate) fn mask(index: usize) -> Bitmap {
-    1 << (index % (SIZE_BITS)) // bit within a Bitmap
+    1 << (index % SIZE_BITS) // bit within a Bitmap
 }
 
 pub(crate) fn get(bitmap: &[Bitmap], index: usize) -> Bitmap {

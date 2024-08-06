@@ -87,7 +87,7 @@ impl ExfatCursor {
     fn new(pnid: node::Nid) -> Self {
         Self {
             pnid,
-            curnid: node::NID_INVALID,
+            curnid: node::NID_NONE,
             curidx: usize::MAX,
         }
     }
@@ -229,6 +229,7 @@ impl Exfat {
             || c - exfatfs::EXFAT_FIRST_DATA_CLUSTER >= u32::from_le(self.sb.cluster_count)
     }
 
+    /// # Panics
     pub fn next_cluster(&mut self, nid: node::Nid, cluster: u32) -> u32 {
         assert!(
             cluster >= exfatfs::EXFAT_FIRST_DATA_CLUSTER,
@@ -268,6 +269,7 @@ impl Exfat {
         Ok(node.fptr_cluster)
     }
 
+    /// # Errors
     pub fn flush_nodes(&mut self) -> nix::Result<()> {
         self.flush_nodes_impl(node::NID_ROOT)
     }
@@ -283,6 +285,7 @@ impl Exfat {
         self.flush_node(nid)
     }
 
+    /// # Errors
     pub fn flush(&mut self) -> nix::Result<()> {
         if self.cmap.dirty {
             let offset = self.c2o(self.cmap.start_cluster);
@@ -512,10 +515,12 @@ impl Exfat {
         Ok(())
     }
 
+    /// # Errors
+    /// # Panics
     pub fn truncate(&mut self, nid: node::Nid, size: u64, erase: bool) -> nix::Result<()> {
         let node = get_node!(self.nmap, &nid);
         assert!(
-            node.references != 0 || node.pnid == node::NID_INVALID,
+            node.references != 0 || node.pnid == node::NID_NONE,
             "no references, node changes can be lost, pnid {}",
             node.pnid
         );
@@ -545,6 +550,7 @@ impl Exfat {
         Ok(())
     }
 
+    /// # Panics
     #[must_use]
     pub fn get_free_clusters(&self) -> u32 {
         let mut free_clusters = 0;
@@ -601,6 +607,7 @@ impl Exfat {
         Ok(true)
     }
 
+    /// # Errors
     pub fn find_used_sectors(&self, a: &mut u64, b: &mut u64) -> nix::Result<bool> {
         let (mut ca, mut cb) = if *a == 0 && *b == 0 {
             (
@@ -620,6 +627,8 @@ impl Exfat {
         Ok(true)
     }
 
+    /// # Errors
+    /// # Panics
     pub fn pread(&mut self, nid: node::Nid, buf: &mut [u8], offset: u64) -> nix::Result<u64> {
         let size = buf.len().try_into().unwrap();
         let node = get_node!(self.nmap, &nid);
@@ -679,6 +688,8 @@ impl Exfat {
         Ok(std::cmp::min(size, node_size - offset) - remainder)
     }
 
+    /// # Errors
+    /// # Panics
     pub fn pwrite(&mut self, nid: node::Nid, buf: &[u8], offset: u64) -> nix::Result<u64> {
         let size = buf.len().try_into().unwrap();
         if offset > get_node!(self.nmap, &nid).size {
@@ -969,7 +980,7 @@ impl Exfat {
             return Err(nix::errno::Errno::EIO);
         }
 
-        let mut node = self.alloc_node();
+        let mut node = Self::alloc_node();
         node.entry_offset = offset;
         node.init_meta1(meta1);
         node.init_meta2(meta2);
@@ -1185,7 +1196,7 @@ impl Exfat {
                     return Err(e);
                 }
             };
-            if nid != node::NID_INVALID {
+            if nid != node::NID_NONE {
                 nids.push(nid);
             }
             offset = next;
@@ -1199,25 +1210,21 @@ impl Exfat {
         dnid: node::Nid,
         mut node: node::ExfatNode,
     ) -> nix::Result<node::Nid> {
-        assert_eq!(node.nid, node::NID_INVALID);
+        assert_eq!(node.nid, node::NID_NONE);
         node.nid = self.get_nid()?;
-        self.nmap_attach_node(dnid, node)
+        Ok(self.nmap_attach_node(dnid, node))
     }
 
-    fn nmap_attach_node(
-        &mut self,
-        dnid: node::Nid,
-        mut node: node::ExfatNode,
-    ) -> nix::Result<node::Nid> {
-        assert_ne!(dnid, node::NID_INVALID);
-        assert_ne!(node.nid, node::NID_INVALID);
+    fn nmap_attach_node(&mut self, dnid: node::Nid, mut node: node::ExfatNode) -> node::Nid {
+        assert_ne!(dnid, node::NID_NONE);
+        assert_ne!(node.nid, node::NID_NONE);
         assert_ne!(node.nid, node::NID_ROOT); // root directly uses nmap
         let dnode = get_mut_node!(self.nmap, &dnid);
         node.pnid = dnode.nid;
         dnode.cnids.push(node.nid);
         let nid = node.nid;
         assert!(self.nmap.insert(node.nid, node).is_none());
-        Ok(nid)
+        nid
     }
 
     fn nmap_detach(&mut self, dnid: node::Nid, nid: node::Nid) -> node::ExfatNode {
@@ -1227,26 +1234,26 @@ impl Exfat {
     }
 
     fn nmap_detach_node(&mut self, dnid: node::Nid, nid: node::Nid) -> node::ExfatNode {
-        assert_ne!(dnid, node::NID_INVALID);
-        assert_ne!(nid, node::NID_INVALID);
+        assert_ne!(dnid, node::NID_NONE);
+        assert_ne!(nid, node::NID_NONE);
         assert_ne!(nid, node::NID_ROOT); // root directly uses nmap
         let dnode = get_mut_node!(self.nmap, &dnid);
         if let Some(i) = dnode.cnids.iter().position(|x| *x == nid) {
             dnode.cnids.swap_remove(i);
         }
         let mut node = self.nmap.remove(&nid).unwrap();
-        node.pnid = node::NID_INVALID; // sanity
+        node.pnid = node::NID_NONE; // sanity
         node
     }
 
-    fn reset_cache(&mut self) -> nix::Result<()> {
-        self.reset_cache_impl(node::NID_ROOT)
+    fn reset_cache(&mut self) {
+        self.reset_cache_impl(node::NID_ROOT);
     }
 
-    fn reset_cache_impl(&mut self, nid: node::Nid) -> nix::Result<()> {
+    fn reset_cache_impl(&mut self, nid: node::Nid) {
         while !get_node!(self.nmap, &nid).cnids.is_empty() {
             let cnid = get_node!(self.nmap, &nid).cnids[0];
-            self.reset_cache_impl(cnid)?;
+            self.reset_cache_impl(cnid);
             self.nmap_detach(nid, cnid);
         }
         let node = get_mut_node!(self.nmap, &nid);
@@ -1266,16 +1273,17 @@ impl Exfat {
         while node.references > 0 {
             node.put();
         }
-        Ok(())
     }
 
+    /// # Errors
+    /// # Panics
     pub fn flush_node(&mut self, nid: node::Nid) -> nix::Result<()> {
         let node = get_node!(self.nmap, &nid);
         if !node.is_dirty {
             return Ok(()); // no need to flush
         }
         assert_eq!(self.ro, 0, "unable to flush node to read-only FS");
-        if node.pnid == node::NID_INVALID {
+        if node.pnid == node::NID_NONE {
             return Ok(()); // do not flush unlinked node
         }
 
@@ -1355,7 +1363,7 @@ impl Exfat {
         assert!(dnode.is_directory(), "attempted to shrink a file");
         assert!(dnode.is_cached, "attempted to shrink uncached directory");
 
-        let mut last_nid = node::NID_INVALID;
+        let mut last_nid = node::NID_NONE;
         if !dnode.cnids.is_empty() {
             last_nid = dnode.cnids[0];
             for cnid in &dnode.cnids {
@@ -1372,7 +1380,7 @@ impl Exfat {
         }
 
         let mut entries = 0;
-        if last_nid != node::NID_INVALID {
+        if last_nid != node::NID_NONE {
             let last_node = get_node!(self.nmap, &last_nid);
             // offset of the last entry
             entries += last_node.entry_offset / exfatfs::EXFAT_ENTRY_SIZE_U64;
@@ -1443,6 +1451,7 @@ impl Exfat {
         result
     }
 
+    /// # Errors
     pub fn unlink(&mut self, nid: node::Nid) -> nix::Result<()> {
         let node = get_node!(self.nmap, &nid);
         if node.references > 1 {
@@ -1454,6 +1463,7 @@ impl Exfat {
         self.delete(nid)
     }
 
+    /// # Errors
     pub fn rmdir(&mut self, nid: node::Nid) -> nix::Result<()> {
         let node = get_node!(self.nmap, &nid);
         if node.references > 1 {
@@ -1599,7 +1609,7 @@ impl Exfat {
         meta1.checksum = checksum;
         self.write_entries(dnid, &entries, 2 + name_entries, offset)?;
 
-        let mut node = self.alloc_node();
+        let mut node = Self::alloc_node();
         node.entry_offset = offset;
         node.init_meta1(bytemuck::cast_ref(&entries[0]));
         node.init_meta2(bytemuck::cast_ref(&entries[1]));
@@ -1609,9 +1619,9 @@ impl Exfat {
         Ok(nid)
     }
 
-    fn create_at(&mut self, dnid: node::Nid, path: &str, attrib: u16) -> nix::Result<node::Nid> {
-        let (dnid, enid, name) = self.split_at(dnid, path)?;
-        if enid != node::NID_INVALID {
+    fn create(&mut self, dnid: node::Nid, cnps: &[&str], attrib: u16) -> nix::Result<node::Nid> {
+        let (dnid, enid, name) = self.split(dnid, cnps)?;
+        if enid != node::NID_NONE {
             get_mut_node!(self.nmap, &enid).put();
             get_mut_node!(self.nmap, &dnid).put();
             return Err(nix::errno::Errno::EEXIST);
@@ -1642,29 +1652,47 @@ impl Exfat {
         Ok(nid)
     }
 
+    /// # Errors
     pub fn mknod(&mut self, path: &str) -> nix::Result<node::Nid> {
-        self.mknod_at(node::NID_ROOT, path)
+        self.mknod_impl(node::NID_ROOT, &Self::split_path(path))
     }
 
-    pub fn mknod_at(&mut self, dnid: node::Nid, path: &str) -> nix::Result<node::Nid> {
-        let nid = self.create_at(dnid, path, exfatfs::EXFAT_ATTRIB_ARCH)?;
+    /// # Errors
+    pub fn mknod_at(&mut self, dnid: node::Nid, cnp: &str) -> nix::Result<node::Nid> {
+        if cnp == "." || cnp == ".." {
+            return Err(nix::errno::Errno::EISDIR);
+        }
+        self.mknod_impl(dnid, &[cnp])
+    }
+
+    fn mknod_impl(&mut self, dnid: node::Nid, cnps: &[&str]) -> nix::Result<node::Nid> {
+        let nid = self.create(dnid, cnps, exfatfs::EXFAT_ATTRIB_ARCH)?;
         if self.opt.debug {
-            assert_eq!(nid, self.lookup_at(dnid, path)?);
+            assert_eq!(nid, self.lookup_impl(dnid, cnps)?);
             get_mut_node!(self.nmap, &nid).put();
         }
         Ok(nid)
     }
 
+    /// # Errors
     pub fn mkdir(&mut self, path: &str) -> nix::Result<node::Nid> {
-        self.mkdir_at(node::NID_ROOT, path)
+        self.mkdir_impl(node::NID_ROOT, &Self::split_path(path))
     }
 
-    pub fn mkdir_at(&mut self, dnid: node::Nid, path: &str) -> nix::Result<node::Nid> {
-        let nid = self.create_at(dnid, path, exfatfs::EXFAT_ATTRIB_DIR)?;
+    /// # Errors
+    pub fn mkdir_at(&mut self, dnid: node::Nid, cnp: &str) -> nix::Result<node::Nid> {
+        if cnp == "." || cnp == ".." {
+            return Err(nix::errno::Errno::EEXIST);
+        }
+        self.mkdir_impl(dnid, &[cnp])
+    }
+
+    fn mkdir_impl(&mut self, dnid: node::Nid, cnps: &[&str]) -> nix::Result<node::Nid> {
+        let nid = self.create(dnid, cnps, exfatfs::EXFAT_ATTRIB_DIR)?;
         // relan/exfat unconditionally lookup the path for node
         if self.opt.debug {
             // relan/exfat returns 0 on lookup failure
-            assert_eq!(nid, self.lookup_at(dnid, path)?);
+            assert_eq!(nid, self.lookup_impl(dnid, cnps)?);
             get_mut_node!(self.nmap, &nid).put();
         }
         get_mut_node!(self.nmap, &nid).get();
@@ -1738,22 +1766,42 @@ impl Exfat {
         // update pnid / cnids to move nid from old_dnid to new_dnid
         let node = self.nmap_detach_node(old_dnid, nid);
         assert_eq!(node.nid, nid);
-        self.nmap_attach_node(new_dnid, node)
+        Ok(self.nmap_attach_node(new_dnid, node))
     }
 
+    /// # Errors
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> nix::Result<node::Nid> {
-        self.rename_at(node::NID_ROOT, old_path, node::NID_ROOT, new_path)
+        self.rename_impl(
+            node::NID_ROOT,
+            &Self::split_path(old_path),
+            node::NID_ROOT,
+            &Self::split_path(new_path),
+        )
     }
 
+    /// # Errors
     pub fn rename_at(
         &mut self,
         old_dnid: node::Nid,
-        old_path: &str,
+        old_cnp: &str,
         new_dnid: node::Nid,
-        new_path: &str,
+        new_cnp: &str,
     ) -> nix::Result<node::Nid> {
-        let nid = self.lookup_at(old_dnid, old_path)?;
-        let (dnid, enid, name) = match self.split_at(new_dnid, new_path) {
+        if old_cnp == "." || old_cnp == ".." {
+            return Err(nix::errno::Errno::EBUSY);
+        }
+        self.rename_impl(old_dnid, &[old_cnp], new_dnid, &[new_cnp])
+    }
+
+    fn rename_impl(
+        &mut self,
+        old_dnid: node::Nid,
+        old_cnps: &[&str],
+        new_dnid: node::Nid,
+        new_cnps: &[&str],
+    ) -> nix::Result<node::Nid> {
+        let nid = self.lookup_impl(old_dnid, old_cnps)?;
+        let (dnid, enid, name) = match self.split(new_dnid, new_cnps) {
             Ok(v) => v,
             Err(e) => {
                 get_mut_node!(self.nmap, &nid).put();
@@ -1766,7 +1814,7 @@ impl Exfat {
             let mut dnid = dnid;
             loop {
                 if nid == dnid {
-                    if enid != node::NID_INVALID {
+                    if enid != node::NID_NONE {
                         get_mut_node!(self.nmap, &enid).put();
                     }
                     get_mut_node!(self.nmap, &dnid).put();
@@ -1774,13 +1822,13 @@ impl Exfat {
                     return Err(nix::errno::Errno::EINVAL);
                 }
                 dnid = get_node!(self.nmap, &dnid).pnid;
-                if dnid == node::NID_INVALID {
+                if dnid == node::NID_NONE {
                     break;
                 }
             }
         }
 
-        if enid != node::NID_INVALID {
+        if enid != node::NID_NONE {
             // remove target if it's not the same node as source
             if enid != nid {
                 // unlink_rename_target puts enid regardless of result
@@ -1871,6 +1919,8 @@ impl Exfat {
         }
     }
 
+    /// # Errors
+    /// # Panics
     pub fn set_label(&mut self, label: &str) -> nix::Result<()> {
         let label = label.as_bytes();
         let label_utf16 = utf::utf8_to_utf16(label, exfatfs::EXFAT_ENAME_MAX, label.len())?;
@@ -1895,6 +1945,7 @@ impl Exfat {
         Ok(())
     }
 
+    /// # Errors
     pub fn opendir_cursor(&mut self, dnid: node::Nid) -> nix::Result<ExfatCursor> {
         get_mut_node!(self.nmap, &dnid).get();
         if let Err(e) = self.cache_directory(dnid) {
@@ -1908,12 +1959,14 @@ impl Exfat {
         get_mut_node!(self.nmap, &c.pnid).put();
     }
 
+    /// # Errors
+    /// # Panics
     pub fn readdir_cursor(&mut self, c: &mut ExfatCursor) -> nix::Result<node::Nid> {
-        if c.curnid == node::NID_INVALID {
+        if c.curnid == node::NID_NONE {
             let dnode = get_node!(self.nmap, &c.pnid);
             if dnode.cnids.is_empty() {
                 c.curidx = usize::MAX;
-                c.curnid = node::NID_INVALID;
+                c.curnid = node::NID_NONE;
             } else {
                 c.curidx = 0;
                 c.curnid = dnode.cnids[c.curidx];
@@ -1922,13 +1975,13 @@ impl Exfat {
             let dnode = get_node!(self.nmap, &c.pnid);
             if c.curidx + 1 >= dnode.cnids.len() {
                 c.curidx = usize::MAX;
-                c.curnid = node::NID_INVALID;
+                c.curnid = node::NID_NONE;
             } else {
                 c.curidx += 1;
                 c.curnid = dnode.cnids[c.curidx];
             }
         }
-        if c.curnid != node::NID_INVALID {
+        if c.curnid != node::NID_NONE {
             let node = get_mut_node!(self.nmap, &c.curnid);
             node.get(); // caller needs to put this node
             assert_eq!(node.nid, c.curnid);
@@ -1975,30 +2028,36 @@ impl Exfat {
         }
     }
 
-    fn get_comp(path: &str) -> Vec<&str> {
+    fn split_path(path: &str) -> Vec<&str> {
         let mut v = vec![];
         for x in &path.trim_matches('/').split('/').collect::<Vec<&str>>() {
             // multiple /'s between components generates ""
-            if !x.is_empty() {
+            if !x.is_empty() && *x != "." {
                 v.push(*x);
             }
         }
         v
     }
 
+    /// # Errors
     pub fn lookup(&mut self, path: &str) -> nix::Result<node::Nid> {
-        self.lookup_at(node::NID_ROOT, path)
+        self.lookup_impl(node::NID_ROOT, &Self::split_path(path))
+    }
+
+    /// # Errors
+    pub fn lookup_at(&mut self, dnid: node::Nid, cnp: &str) -> nix::Result<node::Nid> {
+        if cnp == "." {
+            return Ok(dnid);
+        }
+        self.lookup_impl(dnid, &[cnp])
     }
 
     // Unlike obscure path based abstraction provided by libfuse,
     // lookup ops in fuser simply takes component name with parent ino.
-    pub fn lookup_at(&mut self, dnid: node::Nid, path: &str) -> nix::Result<node::Nid> {
+    fn lookup_impl(&mut self, dnid: node::Nid, cnps: &[&str]) -> nix::Result<node::Nid> {
         let mut dnid = dnid;
         get_mut_node!(self.nmap, &dnid).get();
-        for s in &Self::get_comp(path) {
-            if *s == "." {
-                continue; // skip "." component
-            }
+        for s in cnps {
             let nid = match self.lookup_name(dnid, s, s.len()) {
                 Ok(v) => v,
                 Err(e) => {
@@ -2026,19 +2085,15 @@ impl Exfat {
         true
     }
 
-    fn split_at(
+    fn split(
         &mut self,
         dnid: node::Nid,
-        path: &str,
+        cnps: &[&str],
     ) -> nix::Result<(node::Nid, node::Nid, Vec<u16>)> {
         let mut dnid = dnid;
         get_mut_node!(self.nmap, &dnid).get();
-        let comp = Self::get_comp(path);
-        for (i, s) in comp.iter().enumerate() {
-            if *s == "." {
-                continue; // skip "." component
-            }
-            if i == comp.len() - 1 {
+        for (i, s) in cnps.iter().enumerate() {
+            if i == cnps.len() - 1 {
                 let b = s.as_bytes();
                 if !Self::is_allowed_char(b, b.len()) {
                     // contains characters that are not allowed
@@ -2054,7 +2109,7 @@ impl Exfat {
                 };
                 let nid = match self.lookup_name(dnid, s, s.len()) {
                     Ok(v) => v,
-                    Err(nix::errno::Errno::ENOENT) => node::NID_INVALID,
+                    Err(nix::errno::Errno::ENOENT) => node::NID_NONE,
                     Err(e) => {
                         get_mut_node!(self.nmap, &dnid).put();
                         return Err(e);
@@ -2236,6 +2291,7 @@ impl Exfat {
         self.fsync()
     }
 
+    /// # Errors
     pub fn soil_super_block(&mut self) -> nix::Result<()> {
         if self.ro != 0 {
             return Ok(());
@@ -2245,6 +2301,8 @@ impl Exfat {
         self.commit_super_block()
     }
 
+    /// # Errors
+    /// # Panics
     pub fn mount(spec: &str, args: &[&str]) -> nix::Result<Exfat> {
         log::debug!("{args:?}");
         let opt = option::ExfatOption::new(args)?;
@@ -2364,7 +2422,7 @@ impl Exfat {
 
         let root = node::ExfatNode::new_root();
         assert_eq!(root.nid, node::NID_ROOT);
-        assert_eq!(root.pnid, node::NID_INVALID);
+        assert_eq!(root.pnid, node::NID_NONE);
         let nid = root.nid;
         ef.insert_root_node(root);
 
@@ -2390,21 +2448,21 @@ impl Exfat {
 
         if let Err(e) = ef.cache_directory(nid) {
             get_mut_node!(ef.nmap, &nid).put();
-            ef.reset_cache()?;
+            ef.reset_cache();
             ef.remove_root_node();
             return Err(e);
         }
         if ef.upcase.is_empty() {
             log::error!("upcase table is not found");
             get_mut_node!(ef.nmap, &nid).put();
-            ef.reset_cache()?;
+            ef.reset_cache();
             ef.remove_root_node();
             return Err(nix::errno::Errno::EIO);
         }
         if ef.cmap.chunk.is_empty() {
             log::error!("clusters bitmap is not found");
             get_mut_node!(ef.nmap, &nid).put();
-            ef.reset_cache()?;
+            ef.reset_cache();
             ef.remove_root_node();
             return Err(nix::errno::Errno::EIO);
         }
@@ -2429,11 +2487,13 @@ impl Exfat {
         self.commit_super_block()
     }
 
+    /// # Errors
+    /// # Panics
     pub fn unmount(&mut self) -> nix::Result<()> {
         self.flush_nodes()?;
         self.flush()?;
         get_mut_node!(self.nmap, &node::NID_ROOT).put();
-        self.reset_cache()?;
+        self.reset_cache();
         self.dump_nmap();
         self.remove_root_node();
         self.finalize_super_block()?;
@@ -2450,6 +2510,7 @@ impl Exfat {
         Ok(())
     }
 
+    /// # Errors
     pub fn stat(&self, nid: node::Nid) -> nix::Result<ExfatStat> {
         let Some(node) = self.nmap.get(&nid) else {
             return Err(nix::errno::Errno::ENOENT);
@@ -2485,6 +2546,7 @@ impl Exfat {
     // a) no simple way to count files;
     // b) no such thing as inode;
     // So here we assume that inode = cluster.
+    /// # Panics
     #[must_use]
     pub fn statfs(&self) -> ExfatStatFs {
         let cluster_size = self.get_cluster_size().try_into().unwrap();
@@ -2505,29 +2567,46 @@ impl Exfat {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test_exfat_get_comp() {
-        let v = super::Exfat::get_comp("");
-        assert_eq!(v.len(), 0);
+    fn test_exfat_split_path() {
+        assert_eq!(super::Exfat::split_path("").len(), 0);
 
-        let v = super::Exfat::get_comp("file");
-        assert_eq!(v, ["file"]);
+        assert_eq!(super::Exfat::split_path("/").len(), 0);
+        assert_eq!(super::Exfat::split_path("/.").len(), 0);
 
-        let v = super::Exfat::get_comp("/");
-        assert_eq!(v.len(), 0);
-        let v = super::Exfat::get_comp("//");
-        assert_eq!(v.len(), 0);
+        assert_eq!(super::Exfat::split_path("//").len(), 0);
+        assert_eq!(super::Exfat::split_path("//.").len(), 0);
 
-        let v = super::Exfat::get_comp("/path");
-        assert_eq!(v, ["path"]);
-        let v = super::Exfat::get_comp("//path");
-        assert_eq!(v, ["path"]);
+        assert_eq!(super::Exfat::split_path(".").len(), 0);
+        assert_eq!(super::Exfat::split_path("./.").len(), 0);
 
-        let v = super::Exfat::get_comp("/path/to/file");
-        assert_eq!(v, ["path", "to", "file"]);
-        let v = super::Exfat::get_comp("/path/to/file/");
-        assert_eq!(v, ["path", "to", "file"]);
-        let v = super::Exfat::get_comp("///path///to///file///");
-        assert_eq!(v, ["path", "to", "file"]);
+        assert_eq!(super::Exfat::split_path(" "), [" "]);
+        assert_eq!(super::Exfat::split_path(".."), [".."]);
+        assert_eq!(super::Exfat::split_path("cnp"), ["cnp"]);
+
+        assert_eq!(super::Exfat::split_path("/cnp"), ["cnp"]);
+        assert_eq!(super::Exfat::split_path("//cnp"), ["cnp"]);
+        assert_eq!(super::Exfat::split_path("./cnp"), ["cnp"]);
+
+        assert_eq!(super::Exfat::split_path("cnp/"), ["cnp"]);
+        assert_eq!(super::Exfat::split_path("cnp//"), ["cnp"]);
+        assert_eq!(super::Exfat::split_path("cnp/."), ["cnp"]);
+
+        assert_eq!(super::Exfat::split_path("/cnp/"), ["cnp"]);
+        assert_eq!(super::Exfat::split_path("//cnp//"), ["cnp"]);
+        assert_eq!(super::Exfat::split_path("./cnp/."), ["cnp"]);
+
+        assert_eq!(
+            super::Exfat::split_path("/path/to/cnp"),
+            ["path", "to", "cnp"]
+        );
+        assert_eq!(
+            super::Exfat::split_path("///path///to///cnp///"),
+            ["path", "to", "cnp"]
+        );
+        assert_eq!(
+            super::Exfat::split_path("./path/./to/./cnp/."),
+            ["path", "to", "cnp"]
+        );
     }
 
     #[allow(unreachable_code)]

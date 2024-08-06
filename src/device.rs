@@ -15,6 +15,7 @@ pub struct ExfatDevice {
 }
 
 impl ExfatDevice {
+    /// # Errors
     pub fn new(spec: &str, mode: &str) -> std::io::Result<Self> {
         Self::new_from_opt(
             spec,
@@ -31,6 +32,7 @@ impl ExfatDevice {
         open(spec, mode)
     }
 
+    /// # Errors
     pub fn fsync(&mut self) -> std::io::Result<()> {
         self.fp.flush()
     }
@@ -44,18 +46,22 @@ impl ExfatDevice {
         self.size
     }
 
+    /// # Errors
     pub fn get_position(&mut self) -> std::io::Result<u64> {
         self.fp.stream_position()
     }
 
+    /// # Errors
     pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
         self.fp.read_exact(buf)
     }
 
+    /// # Errors
     pub fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
         self.fp.write_all(buf)
     }
 
+    /// # Errors
     pub fn readx(&mut self, size: u64) -> std::io::Result<Vec<u8>> {
         let size = match size.try_into() {
             Ok(v) => v,
@@ -69,6 +75,7 @@ impl ExfatDevice {
         Ok(buf)
     }
 
+    /// # Errors
     pub fn pread(&mut self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
         let cur = util::seek_cur(&mut self.fp, 0)?;
         util::seek_set(&mut self.fp, offset)?;
@@ -77,6 +84,7 @@ impl ExfatDevice {
         result
     }
 
+    /// # Errors
     pub fn pwrite(&mut self, buf: &[u8], offset: u64) -> std::io::Result<()> {
         let cur = util::seek_cur(&mut self.fp, 0)?;
         util::seek_set(&mut self.fp, offset)?;
@@ -85,6 +93,7 @@ impl ExfatDevice {
         result
     }
 
+    /// # Errors
     pub fn preadx(&mut self, size: u64, offset: u64) -> std::io::Result<Vec<u8>> {
         let size = match size.try_into() {
             Ok(v) => v,
@@ -98,6 +107,7 @@ impl ExfatDevice {
         Ok(buf)
     }
 
+    /// # Errors
     pub fn seek_set(&mut self, offset: u64) -> std::io::Result<u64> {
         util::seek_set(&mut self.fp, offset)
     }

@@ -380,7 +380,26 @@ mod tests {
         let dst = body[0];
         assert_eq!(dst.typ, 123);
         assert_eq!(dst.length, 234);
-        assert_eq!(dst.name, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+        assert_eq!(
+            dst.name,
+            [
+                u16::from_le(0),
+                u16::from_le(1),
+                u16::from_le(2),
+                u16::from_le(3),
+                u16::from_le(4),
+                u16::from_le(5),
+                u16::from_le(6),
+                u16::from_le(7),
+                u16::from_le(8),
+                u16::from_le(9),
+                u16::from_le(10),
+                u16::from_le(11),
+                u16::from_le(12),
+                u16::from_le(13),
+                u16::from_le(14)
+            ]
+        );
 
         assert_ne!(
             format!("{:p}", std::ptr::addr_of!(src)),
@@ -397,7 +416,23 @@ mod tests {
 
         src.typ = 123;
         src.length = 234;
-        src.name = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+        src.name = [
+            0_u16.to_le(),
+            1_u16.to_le(),
+            2_u16.to_le(),
+            3_u16.to_le(),
+            4_u16.to_le(),
+            5_u16.to_le(),
+            6_u16.to_le(),
+            7_u16.to_le(),
+            8_u16.to_le(),
+            9_u16.to_le(),
+            10_u16.to_le(),
+            11_u16.to_le(),
+            12_u16.to_le(),
+            13_u16.to_le(),
+            14_u16.to_le(),
+        ];
 
         let dst: [u8; super::EXFAT_ENTRY_SIZE] = unsafe { std::mem::transmute(src) };
         assert_eq!(
@@ -438,7 +473,23 @@ mod tests {
 
         src.typ = 123;
         src.length = 234;
-        src.name = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+        src.name = [
+            0_u16.to_le(),
+            1_u16.to_le(),
+            2_u16.to_le(),
+            3_u16.to_le(),
+            4_u16.to_le(),
+            5_u16.to_le(),
+            6_u16.to_le(),
+            7_u16.to_le(),
+            8_u16.to_le(),
+            9_u16.to_le(),
+            10_u16.to_le(),
+            11_u16.to_le(),
+            12_u16.to_le(),
+            13_u16.to_le(),
+            14_u16.to_le(),
+        ];
 
         let dst = unsafe { crate::util::any_as_u8_slice(&src) };
         assert_eq!(

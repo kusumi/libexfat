@@ -97,8 +97,8 @@ impl exfat::Exfat {
         assert_eq!(bitmap::count(&self.imap.chunk), 0);
     }
 
-    pub(crate) fn alloc_node(&self) -> node::ExfatNode {
-        node::ExfatNode::new(node::NID_INVALID)
+    pub(crate) fn alloc_node() -> node::ExfatNode {
+        node::ExfatNode::new(node::NID_NONE)
     }
 
     pub(crate) fn get_nid(&mut self) -> nix::Result<node::Nid> {
@@ -108,7 +108,7 @@ impl exfat::Exfat {
             option::ExfatNidAlloc::Linear => self.get_nidmap_linear()?,
             option::ExfatNidAlloc::Bitmap => self.get_nidmap_bitmap()?,
         };
-        assert_ne!(nid, node::NID_INVALID);
+        assert_ne!(nid, node::NID_NONE);
         assert_ne!(nid, node::NID_ROOT);
         Ok(nid)
     }
@@ -149,12 +149,10 @@ impl exfat::Exfat {
 
     pub(crate) fn put_nid(&mut self, nid: node::Nid) {
         match self.opt.nidalloc {
-            option::ExfatNidAlloc::Linear => self.put_nidmap_linear(nid),
+            option::ExfatNidAlloc::Linear => (),
             option::ExfatNidAlloc::Bitmap => self.put_nidmap_bitmap(nid),
         }
     }
-
-    fn put_nidmap_linear(&mut self, _nid: node::Nid) {}
 
     fn put_nidmap_bitmap(&mut self, nid: node::Nid) {
         const NIDMAP_POOL_MAX: usize = 1 << 8;
@@ -187,6 +185,7 @@ impl exfat::Exfat {
         self.errors_fixed += 1;
     }
 
+    /// # Errors
     pub fn fsync(&mut self) -> nix::Result<()> {
         if let Err(e) = self.dev.fsync() {
             log::error!("fsync failed: {e}");

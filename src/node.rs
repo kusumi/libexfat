@@ -6,7 +6,7 @@ use crate::util;
 
 pub type Nid = u64;
 
-pub(crate) const NID_INVALID: Nid = 0;
+pub(crate) const NID_NONE: Nid = 0;
 pub(crate) const NID_ROOT: Nid = 1;
 pub(crate) const NID_NODE_OFFSET: Nid = 2;
 
@@ -57,7 +57,7 @@ impl ExfatNode {
             name: vec![],
             strname: String::new(),
             nid,
-            pnid: NID_INVALID,
+            pnid: NID_NONE,
             cnids: vec![],
         }
     }
@@ -66,6 +66,7 @@ impl ExfatNode {
         self.references += 1;
     }
 
+    /// # Panics
     pub fn put(&mut self) {
         self.references -= 1;
         if self.references < 0 {
@@ -195,7 +196,7 @@ impl ExfatNode {
         if self.strname.is_empty() {
             return false;
         }
-        if self.nid == NID_INVALID {
+        if self.nid == NID_NONE {
             return false;
         }
         true
@@ -208,7 +209,7 @@ mod tests {
     fn test_node_nid() {
         let node = super::ExfatNode::new_root();
         assert_eq!(node.nid, super::NID_ROOT);
-        assert_eq!(node.pnid, super::NID_INVALID);
+        assert_eq!(node.pnid, super::NID_NONE);
         assert_eq!(node.cnids.len(), 0);
     }
 

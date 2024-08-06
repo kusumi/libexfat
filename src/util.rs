@@ -58,6 +58,7 @@ pub(crate) fn calc_checksum(entries: &[exfatfs::ExfatEntry], n: usize) -> u16 {
     checksum.to_le()
 }
 
+/// # Panics
 #[must_use]
 pub fn vbr_start_checksum(sector: &[u8], size: u64) -> u32 {
     let mut sum = 0;
@@ -70,6 +71,7 @@ pub fn vbr_start_checksum(sector: &[u8], size: u64) -> u32 {
     sum
 }
 
+/// # Panics
 #[must_use]
 pub fn vbr_add_checksum(sector: &[u8], size: u64, sum: u32) -> u32 {
     let mut sum = sum;

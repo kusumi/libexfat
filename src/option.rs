@@ -113,7 +113,7 @@ impl ExfatOption {
             None => umask,
         };
         let uid = match matches.opt_str("uid") {
-            Some(v) => match v.parse::<u32>() {
+            Some(v) => match v.parse() {
                 Ok(v) => v,
                 Err(e) => {
                     log::error!("{e}");
@@ -123,7 +123,7 @@ impl ExfatOption {
             None => nix::unistd::geteuid().as_raw(),
         };
         let gid = match matches.opt_str("gid") {
-            Some(v) => match v.parse::<u32>() {
+            Some(v) => match v.parse() {
                 Ok(v) => v,
                 Err(e) => {
                     log::error!("{e}");

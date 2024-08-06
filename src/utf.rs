@@ -70,6 +70,8 @@ fn wchar_to_utf8(output: &mut [u8], wc: u64, outsize: usize) -> isize {
     }
 }
 
+/// # Errors
+/// # Panics
 pub fn utf16_to_utf8(input: &[u16], outsize: usize, insize: usize) -> nix::Result<Vec<u8>> {
     let mut output = vec![0; outsize];
     let mut iptr = 0;
@@ -169,6 +171,8 @@ fn wchar_to_utf16(output: &mut [u16], wc: u64, outsize: usize) -> isize {
     2
 }
 
+/// # Errors
+/// # Panics
 pub fn utf8_to_utf16(input: &[u8], outsize: usize, insize: usize) -> nix::Result<Vec<u16>> {
     let mut output = vec![0; outsize];
     let mut iptr = 0;
