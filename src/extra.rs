@@ -167,7 +167,7 @@ impl exfat::Exfat {
         self.nmap.get(&nid)
     }
 
-    pub fn get_mut_node(&mut self, nid: node::Nid) -> Option<&mut node::ExfatNode> {
+    pub fn get_node_mut(&mut self, nid: node::Nid) -> Option<&mut node::ExfatNode> {
         self.nmap.get_mut(&nid)
     }
 

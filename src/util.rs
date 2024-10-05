@@ -21,7 +21,7 @@ macro_rules! round_up {
 pub use round_up;
 
 fn add_checksum_byte(sum: u16, byte: u8) -> u16 {
-    (u32::from((sum << 15) | (sum >> 1)) + u32::from(byte)) as u16
+    (u32::from(sum.rotate_right(1)) + u32::from(byte)) as u16
 }
 
 fn add_checksum_bytes(sum: u16, buf: &[u8], n: usize) -> u16 {
@@ -61,11 +61,11 @@ pub(crate) fn calc_checksum(entries: &[exfatfs::ExfatEntry], n: usize) -> u16 {
 /// # Panics
 #[must_use]
 pub fn vbr_start_checksum(sector: &[u8], size: u64) -> u32 {
-    let mut sum = 0;
+    let mut sum = 0u32;
     for (i, x) in sector.iter().enumerate().take(size.try_into().unwrap()) {
         // skip volume_state and allocated_percent fields
         if i != 0x6a && i != 0x6b && i != 0x70 {
-            sum = ((sum << 31) | (sum >> 1)) + u32::from(*x);
+            sum = sum.rotate_right(1) + u32::from(*x);
         }
     }
     sum
@@ -76,19 +76,19 @@ pub fn vbr_start_checksum(sector: &[u8], size: u64) -> u32 {
 pub fn vbr_add_checksum(sector: &[u8], size: u64, sum: u32) -> u32 {
     let mut sum = sum;
     for x in sector.iter().take(size.try_into().unwrap()) {
-        sum = ((sum << 31) | (sum >> 1)) + u32::from(*x);
+        sum = sum.rotate_right(1) + u32::from(*x);
     }
     sum
 }
 
 pub(crate) fn calc_name_hash(upcase: &[u16], name: &[u16], length: usize) -> u16 {
-    let mut hash = 0;
+    let mut hash = 0u16;
     for x in name.iter().take(length) {
         let c = u16::from_le(*x);
         // convert to upper case
         let c = upcase[usize::from(c)];
-        hash = ((hash << 15) | (hash >> 1)) + (c & 0xff);
-        hash = ((hash << 15) | (hash >> 1)) + (c >> 8);
+        hash = hash.rotate_right(1) + (c & 0xff);
+        hash = hash.rotate_right(1) + (c >> 8);
     }
     hash.to_le()
 }
@@ -153,11 +153,22 @@ pub(crate) fn read_line() -> std::io::Result<String> {
     Ok(s)
 }
 
-pub(crate) unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-    ::core::slice::from_raw_parts(
-        std::ptr::from_ref::<T>(p).cast::<u8>(),
-        ::core::mem::size_of::<T>(),
-    )
+// cast [u8] slice to T
+pub(crate) fn align_to<T>(buf: &[u8]) -> &T {
+    let (prefix, body, suffix) = unsafe { buf.align_to::<T>() };
+    assert!(prefix.is_empty());
+    assert!(suffix.is_empty());
+    &body[0]
+}
+
+// cast T to [u8] slice
+pub(crate) fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+    unsafe {
+        ::core::slice::from_raw_parts(
+            std::ptr::from_ref::<T>(p).cast::<u8>(),
+            ::core::mem::size_of::<T>(),
+        )
+    }
 }
 
 #[must_use]

@@ -1,4 +1,4 @@
-libexfat ([v0.2.1](https://github.com/kusumi/libexfat/releases/tag/v0.2.1))
+libexfat ([v0.2.2](https://github.com/kusumi/libexfat/releases/tag/v0.2.2))
 ========
 
 ## About
@@ -11,7 +11,7 @@ Linux
 
 ## Requirements
 
-Rust 1.79.0 or newer
+Rust 1.81.0 or newer
 
 ## Build
 

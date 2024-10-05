@@ -187,12 +187,10 @@ mod tests {
 
     #[test]
     fn test_tzset() {
-        match super::tzset() {
-            Ok(()) => {
-                super::tzassert();
-                super::tzclear();
-            }
-            Err(e) => eprintln!("{e}"), // XXX works when not in unittest
+        if let Err(e) = super::tzset() {
+            eprintln!("{e}"); // XXX ["local-offset"] feature not usable in tests
         }
+        super::tzassert();
+        super::tzclear();
     }
 }

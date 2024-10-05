@@ -401,9 +401,14 @@ mod tests {
             ]
         );
 
+        // dst is a copy of body[0]
         assert_ne!(
             format!("{:p}", std::ptr::addr_of!(src)),
             format!("{:p}", std::ptr::addr_of!(dst))
+        );
+        assert_eq!(
+            format!("{:p}", std::ptr::addr_of!(src)),
+            format!("{:p}", std::ptr::addr_of!(body[0]))
         );
     }
 
@@ -491,7 +496,7 @@ mod tests {
             14_u16.to_le(),
         ];
 
-        let dst = unsafe { crate::util::any_as_u8_slice(&src) };
+        let dst = crate::util::any_as_u8_slice(&src);
         assert_eq!(
             dst,
             [
@@ -517,7 +522,7 @@ mod tests {
 
         assert_eq!(
             format!("{:p}", std::ptr::addr_of!(src)),
-            format!("{:p}", dst as *const _)
+            format!("{:p}", std::ptr::from_ref(dst))
         );
     }
 
@@ -539,7 +544,7 @@ mod tests {
 
         assert_eq!(
             format!("{:p}", std::ptr::addr_of!(src)),
-            format!("{:p}", dst as *const _)
+            format!("{:p}", std::ptr::from_ref(dst))
         );
     }
 
@@ -556,7 +561,7 @@ mod tests {
         src.name = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 
         let dst: &mut super::ExfatEntryName = bytemuck::cast_mut(&mut src);
-        let dst_addr = format!("{:p}", dst as *const _);
+        let dst_addr = format!("{:p}", std::ptr::from_ref(dst));
         assert_eq!(dst.typ, 123);
         assert_eq!(dst.unknown, 234);
         assert_eq!(dst.name, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);

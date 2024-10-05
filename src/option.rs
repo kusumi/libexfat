@@ -35,24 +35,24 @@ pub(crate) struct ExfatOption {
 
 impl ExfatOption {
     fn newopt() -> getopts::Options {
-        let mut opts = getopts::Options::new();
-        opts.optopt("", "mode", "", "<rw|ro|any>");
-        opts.optopt("", "repair", "", "<yes|no|ask>");
-        opts.optflag("", "noatime", "");
-        opts.optopt("", "umask", "", "<octal_number>");
-        opts.optopt("", "dmask", "", "<octal_number>");
-        opts.optopt("", "fmask", "", "<octal_number>");
-        opts.optopt("", "uid", "", "<number>");
-        opts.optopt("", "gid", "", "<number>");
-        opts.optopt("", "nidalloc", "", "<linear|bitmap>");
-        opts.optflag("h", "help", "");
-        opts.optflag("", "debug", "");
-        opts
+        let mut gopt = getopts::Options::new();
+        gopt.optopt("", "mode", "", "<rw|ro|any>");
+        gopt.optopt("", "repair", "", "<yes|no|ask>");
+        gopt.optflag("", "noatime", "");
+        gopt.optopt("", "umask", "", "<octal_number>");
+        gopt.optopt("", "dmask", "", "<octal_number>");
+        gopt.optopt("", "fmask", "", "<octal_number>");
+        gopt.optopt("", "uid", "", "<number>");
+        gopt.optopt("", "gid", "", "<number>");
+        gopt.optopt("", "nidalloc", "", "<linear|bitmap>");
+        gopt.optflag("h", "help", "");
+        gopt.optflag("", "debug", "");
+        gopt
     }
 
     pub(crate) fn new(args: &[&str]) -> nix::Result<Self> {
-        let opts = ExfatOption::newopt();
-        let matches = match opts.parse(args) {
+        let gopt = ExfatOption::newopt();
+        let matches = match gopt.parse(args) {
             Ok(v) => v,
             Err(e) => {
                 log::error!("{e}");
@@ -60,7 +60,7 @@ impl ExfatOption {
             }
         };
         if matches.opt_present("h") {
-            println!("{}", opts.usage("exFAT options"));
+            println!("{}", gopt.usage("exFAT options"));
             return Err(nix::errno::Errno::UnknownErrno); // 0
         }
         let mode = match matches.opt_str("mode") {
