@@ -1,5 +1,5 @@
 use crate::exfat;
-use crate::exfatfs;
+use crate::fs;
 use crate::time;
 use crate::utf;
 use crate::util;
@@ -129,10 +129,10 @@ impl ExfatNode {
 
     #[must_use]
     pub fn is_directory(&self) -> bool {
-        (self.attrib & exfatfs::EXFAT_ATTRIB_DIR) != 0
+        (self.attrib & fs::EXFAT_ATTRIB_DIR) != 0
     }
 
-    pub(crate) fn init_meta1(&mut self, meta1: &exfatfs::ExfatEntryMeta1) {
+    pub(crate) fn init_meta1(&mut self, meta1: &fs::ExfatEntryMeta1) {
         self.attrib = u16::from_le(meta1.attrib);
         self.continuations = meta1.continuations;
         self.mtime = time::exfat2unix(meta1.mdate, meta1.mtime, meta1.mtime_cs, meta1.mtime_tzo);
@@ -140,22 +140,22 @@ impl ExfatNode {
         self.atime = time::exfat2unix(meta1.adate, meta1.atime, 0, meta1.atime_tzo);
     }
 
-    pub(crate) fn init_meta2(&mut self, meta2: &exfatfs::ExfatEntryMeta2) {
+    pub(crate) fn init_meta2(&mut self, meta2: &fs::ExfatEntryMeta2) {
         self.valid_size = u64::from_le(meta2.valid_size);
         self.size = u64::from_le(meta2.size);
         self.start_cluster = u32::from_le(meta2.start_cluster);
         self.fptr_cluster = self.start_cluster;
-        self.is_contiguous = (meta2.flags & exfatfs::EXFAT_FLAG_CONTIGUOUS) != 0;
+        self.is_contiguous = (meta2.flags & fs::EXFAT_FLAG_CONTIGUOUS) != 0;
     }
 
-    pub(crate) fn init_name(&mut self, entries: &[exfatfs::ExfatEntry], n: usize) {
+    pub(crate) fn init_name(&mut self, entries: &[fs::ExfatEntry], n: usize) {
         // u16 name
         assert!(self.name.is_empty());
         for entry in entries.iter().take(n) {
-            let entry: &exfatfs::ExfatEntryName = bytemuck::cast_ref(entry);
+            let entry: &fs::ExfatEntryName = bytemuck::cast_ref(entry);
             self.name.extend_from_slice(&entry.name);
         }
-        assert_eq!(self.name.len(), exfatfs::EXFAT_ENAME_MAX * n);
+        assert_eq!(self.name.len(), fs::EXFAT_ENAME_MAX * n);
         // string name
         let output = utf::utf16_to_utf8(
             &self.name,
@@ -167,7 +167,7 @@ impl ExfatNode {
         self.strname = util::bin_to_string(&output).unwrap();
     }
 
-    pub(crate) fn update_name(&mut self, entries: &[exfatfs::ExfatEntry], n: usize) {
+    pub(crate) fn update_name(&mut self, entries: &[fs::ExfatEntry], n: usize) {
         self.name.clear();
         self.strname.clear();
         self.init_name(entries, n);

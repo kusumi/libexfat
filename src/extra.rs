@@ -1,12 +1,24 @@
 use crate::bitmap;
 use crate::exfat;
-use crate::exfatfs;
+use crate::fs;
 use crate::node;
 use crate::option;
 use crate::util;
 
 #[cfg(feature = "bitmap_u64")]
 use byteorder::ByteOrder;
+
+impl fs::ExfatSuperBlock {
+    #[must_use]
+    pub fn get_sector_size(&self) -> u64 {
+        1 << self.sector_bits
+    }
+
+    #[must_use]
+    pub fn get_cluster_size(&self) -> u64 {
+        self.get_sector_size() << self.spc_bits
+    }
+}
 
 impl exfat::ExfatClusterMap {
     #[cfg(not(feature = "bitmap_u64"))]
@@ -39,7 +51,7 @@ impl exfat::ExfatClusterMap {
 
 impl exfat::Exfat {
     #[must_use]
-    pub fn get_super_block(&self) -> exfatfs::ExfatSuperBlock {
+    pub fn get_super_block(&self) -> fs::ExfatSuperBlock {
         self.sb
     }
 
@@ -208,7 +220,7 @@ impl exfat::Exfat {
         if index == usize::MAX {
             Err(nix::errno::Errno::ENOSPC)
         } else {
-            Ok(exfatfs::EXFAT_FIRST_DATA_CLUSTER + u32::try_from(index).unwrap())
+            Ok(fs::EXFAT_FIRST_DATA_CLUSTER + u32::try_from(index).unwrap())
         }
     }
 
@@ -225,12 +237,74 @@ impl exfat::Exfat {
         }
     }
 
-    pub(crate) fn dump_nmap(&self) {
-        self.dump_nmap_impl(node::NID_ROOT, 0);
+    /// # Errors
+    /// # Panics
+    pub fn prune_node(&mut self, xnid: node::Nid) -> nix::Result<(usize, usize)> {
+        self.flush_nodes()?;
+        self.flush()?;
+
+        let a = self.nmap.len();
+        self.prune_node_impl(node::NID_ROOT, xnid)?;
+        assert!(self.nmap.contains_key(&node::NID_ROOT));
+        assert!(self.nmap.contains_key(&xnid));
+        let b = self.nmap.len();
+        assert!(a >= b);
+        let total_pruned = a - b;
+
+        self.dump_node();
+
+        let xname = exfat::get_node!(self, &xnid).get_name().to_string();
+        self.recache_directory(node::NID_ROOT, &xname)?;
+        let c = self.nmap.len();
+        assert!(c >= b);
+        let total_recached = c - b;
+
+        log::info!(
+            "{} node pruned, {} node recached",
+            total_pruned,
+            total_recached
+        );
+        Ok((total_pruned, total_recached))
     }
 
-    fn dump_nmap_impl(&self, nid: node::Nid, depth: usize) {
-        let node = exfat::get_node!(self.nmap, &nid);
+    // based on reset_node_impl
+    fn prune_node_impl(&mut self, nid: node::Nid, xnid: node::Nid) -> nix::Result<()> {
+        for &cnid in &exfat::get_node!(self, &nid).cnids.clone() {
+            if cnid == xnid {
+                if nid != node::NID_ROOT {
+                    return Err(nix::errno::Errno::EBUSY);
+                }
+                continue;
+            }
+            match self.prune_node_impl(cnid, xnid) {
+                Ok(()) => {
+                    self.nmap_detach(nid, cnid);
+                }
+                Err(nix::errno::Errno::EBUSY) => {
+                    if nid != node::NID_ROOT {
+                        return Err(nix::errno::Errno::EBUSY);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        if nid != node::NID_ROOT {
+            let node = exfat::get_node_mut!(self, &nid);
+            node.is_cached = false;
+            assert!(!node.is_dirty, "node '{}' is dirty", node.get_name());
+            while node.references > 0 {
+                node.put();
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn dump_node(&self) {
+        self.dump_node_impl(node::NID_ROOT, 0);
+    }
+
+    fn dump_node_impl(&self, nid: node::Nid, depth: usize) {
+        let node = exfat::get_node!(self, &nid);
         log::debug!(
             "{}nid {} pnid {} name \"{}\" ref {}",
             "  ".repeat(depth),
@@ -240,7 +314,7 @@ impl exfat::Exfat {
             node.references,
         );
         for x in &node.cnids {
-            self.dump_nmap_impl(*x, depth + 1);
+            self.dump_node_impl(*x, depth + 1);
         }
     }
 }

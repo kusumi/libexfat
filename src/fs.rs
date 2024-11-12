@@ -66,16 +66,6 @@ impl ExfatSuperBlock {
             boot_signature: 0,
         }
     }
-
-    #[must_use]
-    pub fn get_sector_size(&self) -> u64 {
-        1 << self.sector_bits
-    }
-
-    #[must_use]
-    pub fn get_cluster_size(&self) -> u64 {
-        self.get_sector_size() << self.spc_bits
-    }
 }
 
 pub const EXFAT_ENTRY_VALID: u8 = 0x80;

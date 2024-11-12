@@ -1,4 +1,4 @@
-use crate::exfatfs;
+use crate::fs;
 
 use std::io::Seek;
 
@@ -20,6 +20,24 @@ macro_rules! round_up {
 }
 pub use round_up;
 
+#[allow(unused_macros)]
+#[macro_export]
+macro_rules! div_round_down {
+    ($x:expr, $d:expr) => {
+        $x / $d
+    };
+}
+pub use div_round_down;
+
+#[allow(unused_macros)]
+#[macro_export]
+macro_rules! round_down {
+    ($x:expr, $d:expr) => {
+        $crate::div_round_down!($x, $d) * $d
+    };
+}
+pub use round_down;
+
 fn add_checksum_byte(sum: u16, byte: u8) -> u16 {
     (u32::from(sum.rotate_right(1)) + u32::from(byte)) as u16
 }
@@ -33,8 +51,8 @@ fn add_checksum_bytes(sum: u16, buf: &[u8], n: usize) -> u16 {
 }
 
 // relan/exfat takes exfat_entry_meta1*
-fn start_checksum(entry: &exfatfs::ExfatEntry) -> u16 {
-    let buf: &[u8; exfatfs::EXFAT_ENTRY_SIZE] = bytemuck::cast_ref(entry);
+fn start_checksum(entry: &fs::ExfatEntry) -> u16 {
+    let buf: &[u8; fs::EXFAT_ENTRY_SIZE] = bytemuck::cast_ref(entry);
     let mut sum = 0;
     for (i, b) in buf.iter().enumerate() {
         // skip checksum field itself
@@ -46,13 +64,13 @@ fn start_checksum(entry: &exfatfs::ExfatEntry) -> u16 {
 }
 
 fn add_checksum(entry: &[u8], sum: u16) -> u16 {
-    add_checksum_bytes(sum, entry, exfatfs::EXFAT_ENTRY_SIZE)
+    add_checksum_bytes(sum, entry, fs::EXFAT_ENTRY_SIZE)
 }
 
-pub(crate) fn calc_checksum(entries: &[exfatfs::ExfatEntry], n: usize) -> u16 {
+pub(crate) fn calc_checksum(entries: &[fs::ExfatEntry], n: usize) -> u16 {
     let mut checksum = start_checksum(&entries[0]);
     for x in entries.iter().take(n).skip(1) {
-        let buf: &[u8; exfatfs::EXFAT_ENTRY_SIZE] = bytemuck::cast_ref(x);
+        let buf: &[u8; fs::EXFAT_ENTRY_SIZE] = bytemuck::cast_ref(x);
         checksum = add_checksum(buf, checksum);
     }
     checksum.to_le()
@@ -162,7 +180,7 @@ pub(crate) fn align_to<T>(buf: &[u8]) -> &T {
 }
 
 // cast T to [u8] slice
-pub(crate) fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+pub fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     unsafe {
         ::core::slice::from_raw_parts(
             std::ptr::from_ref::<T>(p).cast::<u8>(),
@@ -186,15 +204,18 @@ pub(crate) fn get_os_name() -> &'static str {
     std::env::consts::OS
 }
 
-pub(crate) fn is_linux() -> bool {
+#[must_use]
+pub fn is_linux() -> bool {
     get_os_name() == "linux"
 }
 
-pub(crate) fn is_freebsd() -> bool {
+#[must_use]
+pub fn is_freebsd() -> bool {
     get_os_name() == "freebsd"
 }
 
-pub(crate) fn is_solaris() -> bool {
+#[must_use]
+pub fn is_solaris() -> bool {
     get_os_name() == "solaris"
 }
 

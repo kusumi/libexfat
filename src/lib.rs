@@ -1,8 +1,9 @@
 pub mod bitmap;
+pub mod ctl;
 pub mod device;
 pub mod exfat;
-pub mod exfatfs;
 mod extra;
+pub mod fs;
 pub mod node;
 mod option;
 mod time;

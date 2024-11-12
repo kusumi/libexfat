@@ -2,7 +2,6 @@ use crate::option;
 use crate::util;
 
 use std::io::Read;
-use std::io::Seek;
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
@@ -12,6 +11,8 @@ pub struct ExfatDevice {
     fp: std::fs::File, // buffered reader/writer ?
     mode: option::ExfatMode,
     size: u64, // in bytes
+    #[cfg(not(target_os = "linux"))] // FreeBSD
+    blksize: u64,
 }
 
 impl ExfatDevice {
@@ -46,35 +47,16 @@ impl ExfatDevice {
         self.size
     }
 
-    /// # Errors
-    pub fn get_position(&mut self) -> std::io::Result<u64> {
-        self.fp.stream_position()
+    #[cfg(not(target_os = "linux"))]
+    fn get_aligned_range(&self, buf: &[u8], offset: u64) -> (u64, u64) {
+        let beg = util::round_down!(offset, self.blksize);
+        let end = util::round_up!(offset + u64::try_from(buf.len()).unwrap(), self.blksize);
+        assert!(offset >= beg);
+        assert_eq!((end - beg) % self.blksize, 0);
+        (beg, end)
     }
 
-    /// # Errors
-    pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
-        self.fp.read_exact(buf)
-    }
-
-    /// # Errors
-    pub fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.fp.write_all(buf)
-    }
-
-    /// # Errors
-    pub fn readx(&mut self, size: u64) -> std::io::Result<Vec<u8>> {
-        let size = match size.try_into() {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("{e}");
-                return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
-            }
-        };
-        let mut buf = vec![0; size];
-        self.read(&mut buf)?;
-        Ok(buf)
-    }
-
+    #[cfg(target_os = "linux")]
     /// # Errors
     pub fn pread(&mut self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
         let cur = util::seek_cur(&mut self.fp, 0)?;
@@ -84,11 +66,46 @@ impl ExfatDevice {
         result
     }
 
+    #[cfg(not(target_os = "linux"))]
+    /// # Errors
+    /// # Panics
+    pub fn pread(&mut self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+        let cur = util::seek_cur(&mut self.fp, 0)?;
+        let (beg, end) = self.get_aligned_range(buf, offset);
+        let mut lbuf = vec![0; (end - beg).try_into().unwrap()];
+        util::seek_set(&mut self.fp, beg)?;
+        let result = self.fp.read_exact(&mut lbuf);
+        util::seek_set(&mut self.fp, cur)?;
+        if result.is_ok() {
+            let x = (offset - beg).try_into().unwrap();
+            buf.copy_from_slice(&lbuf[x..x + buf.len()]);
+        }
+        result
+    }
+
+    #[cfg(target_os = "linux")]
     /// # Errors
     pub fn pwrite(&mut self, buf: &[u8], offset: u64) -> std::io::Result<()> {
         let cur = util::seek_cur(&mut self.fp, 0)?;
         util::seek_set(&mut self.fp, offset)?;
         let result = self.fp.write_all(buf);
+        util::seek_set(&mut self.fp, cur)?;
+        result
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    /// # Errors
+    /// # Panics
+    pub fn pwrite(&mut self, buf: &[u8], offset: u64) -> std::io::Result<()> {
+        let cur = util::seek_cur(&mut self.fp, 0)?;
+        let (beg, end) = self.get_aligned_range(buf, offset);
+        let mut lbuf = vec![0; (end - beg).try_into().unwrap()];
+        util::seek_set(&mut self.fp, beg)?;
+        self.fp.read_exact(&mut lbuf)?;
+        let x = (offset - beg).try_into().unwrap();
+        lbuf[x..x + buf.len()].copy_from_slice(buf);
+        util::seek_set(&mut self.fp, beg)?;
+        let result = self.fp.write_all(&lbuf);
         util::seek_set(&mut self.fp, cur)?;
         result
     }
@@ -105,11 +122,6 @@ impl ExfatDevice {
         let mut buf = vec![0; size];
         self.pread(&mut buf, offset)?;
         Ok(buf)
-    }
-
-    /// # Errors
-    pub fn seek_set(&mut self, offset: u64) -> std::io::Result<u64> {
-        util::seek_set(&mut self.fp, offset)
     }
 }
 
@@ -199,5 +211,11 @@ fn open(spec: &str, mode: option::ExfatMode) -> std::io::Result<ExfatDevice> {
         log::error!("{} is unsupported", util::get_os_name());
         return Err(std::io::Error::from(std::io::ErrorKind::Unsupported));
     };
-    Ok(ExfatDevice { fp, mode, size })
+    Ok(ExfatDevice {
+        fp,
+        mode,
+        size,
+        #[cfg(not(target_os = "linux"))]
+        blksize: 512, // XXX use ioctl(2)
+    })
 }

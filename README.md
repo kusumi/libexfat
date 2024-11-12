@@ -1,4 +1,4 @@
-libexfat ([v0.2.2](https://github.com/kusumi/libexfat/releases/tag/v0.2.2))
+libexfat ([v0.3.0](https://github.com/kusumi/libexfat/releases/tag/v0.3.0))
 ========
 
 ## About
@@ -7,7 +7,7 @@ Rust version of [https://github.com/relan/exfat/tree/master/libexfat](https://gi
 
 ## Supported platforms
 
-Linux
+Linux / FreeBSD
 
 ## Requirements
 
@@ -15,7 +15,7 @@ Rust 1.81.0 or newer
 
 ## Build
 
-    $ make
+    $ gmake
 
 ## License
 
