@@ -1,35 +1,32 @@
-use crate::option;
-use crate::util;
-
 use std::io::Read;
 use std::io::Write;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileTypeExt;
 
 #[derive(Debug)]
-pub struct ExfatDevice {
+pub struct Device {
     fp: std::fs::File, // buffered reader/writer ?
-    mode: option::ExfatMode,
+    mode: crate::option::OpenMode,
     size: u64, // in bytes
     #[cfg(not(target_os = "linux"))] // FreeBSD
     blksize: u64,
 }
 
-impl ExfatDevice {
+impl Device {
     /// # Errors
-    pub fn new(spec: &str, mode: &str) -> std::io::Result<Self> {
-        Self::new_from_opt(
+    pub fn new(spec: &str, mode: &str) -> crate::Result<Self> {
+        Self::new_impl(
             spec,
             match mode {
-                "rw" => option::ExfatMode::Rw,
-                "ro" => option::ExfatMode::Ro,
-                "any" => option::ExfatMode::Any, // "ro_fallback" in relan/exfat
-                _ => return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput)),
+                "rw" => crate::option::OpenMode::Rw,
+                "ro" => crate::option::OpenMode::Ro,
+                "any" => crate::option::OpenMode::Any, // "ro_fallback" in relan/exfat
+                _ => return Err(nix::errno::Errno::EINVAL.into()),
             },
         )
     }
 
-    pub(crate) fn new_from_opt(spec: &str, mode: option::ExfatMode) -> std::io::Result<Self> {
+    pub(crate) fn new_impl(spec: &str, mode: crate::option::OpenMode) -> crate::Result<Self> {
         open(spec, mode)
     }
 
@@ -38,7 +35,7 @@ impl ExfatDevice {
         self.fp.flush()
     }
 
-    pub(crate) fn get_mode(&self) -> option::ExfatMode {
+    pub(crate) fn get_mode(&self) -> crate::option::OpenMode {
         self.mode
     }
 
@@ -49,8 +46,8 @@ impl ExfatDevice {
 
     #[cfg(not(target_os = "linux"))]
     fn get_aligned_range(&self, buf: &[u8], offset: u64) -> (u64, u64) {
-        let beg = util::round_down!(offset, self.blksize);
-        let end = util::round_up!(offset + u64::try_from(buf.len()).unwrap(), self.blksize);
+        let beg = crate::util::round_down!(offset, self.blksize);
+        let end = crate::util::round_up!(offset + u64::try_from(buf.len()).unwrap(), self.blksize);
         assert!(offset >= beg);
         assert_eq!((end - beg) % self.blksize, 0);
         (beg, end)
@@ -59,67 +56,48 @@ impl ExfatDevice {
     #[cfg(target_os = "linux")]
     /// # Errors
     pub fn pread(&mut self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
-        let cur = util::seek_cur(&mut self.fp, 0)?;
-        util::seek_set(&mut self.fp, offset)?;
-        let result = self.fp.read_exact(buf);
-        util::seek_set(&mut self.fp, cur)?;
-        result
+        crate::util::seek_set(&mut self.fp, offset)?;
+        self.fp.read_exact(buf)
     }
 
     #[cfg(not(target_os = "linux"))]
     /// # Errors
     /// # Panics
     pub fn pread(&mut self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
-        let cur = util::seek_cur(&mut self.fp, 0)?;
         let (beg, end) = self.get_aligned_range(buf, offset);
         let mut lbuf = vec![0; (end - beg).try_into().unwrap()];
-        util::seek_set(&mut self.fp, beg)?;
-        let result = self.fp.read_exact(&mut lbuf);
-        util::seek_set(&mut self.fp, cur)?;
-        if result.is_ok() {
-            let x = (offset - beg).try_into().unwrap();
-            buf.copy_from_slice(&lbuf[x..x + buf.len()]);
-        }
-        result
+        crate::util::seek_set(&mut self.fp, beg)?;
+        self.fp.read_exact(&mut lbuf)?;
+        let x = (offset - beg).try_into().unwrap();
+        buf.copy_from_slice(&lbuf[x..x + buf.len()]);
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]
     /// # Errors
     pub fn pwrite(&mut self, buf: &[u8], offset: u64) -> std::io::Result<()> {
-        let cur = util::seek_cur(&mut self.fp, 0)?;
-        util::seek_set(&mut self.fp, offset)?;
-        let result = self.fp.write_all(buf);
-        util::seek_set(&mut self.fp, cur)?;
-        result
+        crate::util::seek_set(&mut self.fp, offset)?;
+        self.fp.write_all(buf)
     }
 
     #[cfg(not(target_os = "linux"))]
     /// # Errors
     /// # Panics
     pub fn pwrite(&mut self, buf: &[u8], offset: u64) -> std::io::Result<()> {
-        let cur = util::seek_cur(&mut self.fp, 0)?;
         let (beg, end) = self.get_aligned_range(buf, offset);
         let mut lbuf = vec![0; (end - beg).try_into().unwrap()];
-        util::seek_set(&mut self.fp, beg)?;
+        crate::util::seek_set(&mut self.fp, beg)?;
         self.fp.read_exact(&mut lbuf)?;
         let x = (offset - beg).try_into().unwrap();
         lbuf[x..x + buf.len()].copy_from_slice(buf);
-        util::seek_set(&mut self.fp, beg)?;
-        let result = self.fp.write_all(&lbuf);
-        util::seek_set(&mut self.fp, cur)?;
-        result
+        crate::util::seek_set(&mut self.fp, beg)?;
+        self.fp.write_all(&lbuf)
     }
 
     /// # Errors
+    /// # Panics
     pub fn preadx(&mut self, size: u64, offset: u64) -> std::io::Result<Vec<u8>> {
-        let size = match size.try_into() {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("{e}");
-                return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
-            }
-        };
-        let mut buf = vec![0; size];
+        let mut buf = vec![0; size.try_into().unwrap()];
         self.pread(&mut buf, offset)?;
         Ok(buf)
     }
@@ -133,17 +111,17 @@ fn is_open(fd: std::os::fd::RawFd) -> bool {
     }
 }
 
-fn open_ro(spec: &str) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(spec)
+fn open_ro(spec: &str) -> crate::Result<std::fs::File> {
+    Ok(std::fs::File::open(spec)?)
 }
 
-fn open_rw(spec: &str) -> std::io::Result<std::fs::File> {
+fn open_rw(spec: &str) -> crate::Result<std::fs::File> {
     let fp = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(spec)?;
 
-    if util::is_linux() {
+    if crate::util::is_linux() {
         // linux/fs.h:#define BLKROGET   _IO(0x12,94) /* get read-only status (0 = read_write) */
         nix::ioctl_read_bad!(blkroget, 0x125e, u32);
 
@@ -153,18 +131,17 @@ fn open_rw(spec: &str) -> std::io::Result<std::fs::File> {
         if let Ok(v) = unsafe { blkroget(fp.as_raw_fd(), &mut ro) } {
             if v == 0 {
                 if ro != 0 {
-                    // want ReadOnlyFilesystem
-                    return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+                    return Err(nix::errno::Errno::EROFS.into());
                 }
             } else {
-                return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+                return Err(nix::errno::Errno::EINVAL.into());
             }
         }
     }
     Ok(fp)
 }
 
-fn open(spec: &str, mode: option::ExfatMode) -> std::io::Result<ExfatDevice> {
+fn open(spec: &str, mode: crate::option::OpenMode) -> crate::Result<Device> {
     // The system allocates file descriptors sequentially. If we have been
     // started with stdin (0), stdout (1) or stderr (2) closed, the system
     // will give us descriptor 0, 1 or 2 later when we open block device,
@@ -180,14 +157,14 @@ fn open(spec: &str, mode: option::ExfatMode) -> std::io::Result<ExfatDevice> {
     }
 
     let (mut fp, mode) = match mode {
-        option::ExfatMode::Rw => (open_rw(spec)?, mode),
-        option::ExfatMode::Ro => (open_ro(spec)?, mode),
-        option::ExfatMode::Any => {
+        crate::option::OpenMode::Rw => (open_rw(spec)?, mode),
+        crate::option::OpenMode::Ro => (open_ro(spec)?, mode),
+        crate::option::OpenMode::Any => {
             if let Ok(v) = open_rw(spec) {
-                (v, option::ExfatMode::Rw)
+                (v, crate::option::OpenMode::Rw)
             } else {
                 log::warn!("'{spec}' is write-protected, opening read-only");
-                (open_ro(spec)?, option::ExfatMode::Ro)
+                (open_ro(spec)?, crate::option::OpenMode::Ro)
             }
         }
     };
@@ -195,23 +172,24 @@ fn open(spec: &str, mode: option::ExfatMode) -> std::io::Result<ExfatDevice> {
     let t = fp.metadata()?.file_type();
     if !t.is_block_device() && !t.is_char_device() && !t.is_file() {
         log::error!("'{spec}' is neither a device, nor a regular file");
-        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+        return Err(nix::errno::Errno::EINVAL.into());
     }
 
-    let size = if util::is_linux() || util::is_freebsd() || util::is_solaris() {
-        let size = util::seek_end(&mut fp, 0)?;
+    let size = if crate::util::is_linux() || crate::util::is_freebsd() || crate::util::is_solaris()
+    {
+        let size = crate::util::seek_end(&mut fp, 0)?;
         if size == 0 {
             log::error!("failed to get size of '{spec}'");
-            return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+            return Err(nix::errno::Errno::EINVAL.into());
         }
-        util::seek_set(&mut fp, 0)?;
+        crate::util::seek_set(&mut fp, 0)?;
         size
     } else {
         // XXX other platforms use ioctl(2)
-        log::error!("{} is unsupported", util::get_os_name());
-        return Err(std::io::Error::from(std::io::ErrorKind::Unsupported));
+        log::error!("{} is unsupported", crate::util::get_os_name());
+        return Err(nix::errno::Errno::EOPNOTSUPP.into());
     };
-    Ok(ExfatDevice {
+    Ok(Device {
         fp,
         mode,
         size,

@@ -96,7 +96,7 @@ pub(crate) fn exfat2unix(date: u16, time: u16, centisec: u8, tzoffset: u8) -> u6
     unix_time += i64::from(centisec) / 100;
 
     // exFAT stores timestamps in local time, so we correct it to UTC
-    if tzoffset & 0x80 != 0 {
+    if (tzoffset & 0x80) != 0 {
         // lower 7 bits are signed timezone offset in 15 minute increments
         unix_time -= i64::from((tzoffset << 1) as i8) * 15 * 60 / 2;
     } else {
@@ -163,7 +163,7 @@ pub(crate) fn tzset() -> Result<(), time::error::Error> {
     tzclear();
     let offset = time::UtcOffset::current_local_offset()?;
     unsafe {
-        assert_eq!(EXFAT_TIMEZONE, 0);
+        //assert_eq!(EXFAT_TIMEZONE, 0);
         EXFAT_TIMEZONE = (-offset.whole_seconds()).into();
     }
     Ok(())

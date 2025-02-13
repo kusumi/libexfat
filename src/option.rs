@@ -1,39 +1,37 @@
-use crate::exfat;
-
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum ExfatMode {
+pub(crate) enum OpenMode {
     Rw,
     Ro,
     Any,
 }
 
 #[derive(Debug)]
-pub(crate) enum ExfatRepair {
+pub(crate) enum RepairMode {
     Yes,
     No,
     Ask,
 }
 
 #[derive(Debug)]
-pub(crate) enum ExfatNidAlloc {
+pub(crate) enum NidAllocMode {
     Linear,
     Bitmap,
 }
 
 #[derive(Debug)]
-pub(crate) struct ExfatOption {
-    pub(crate) mode: ExfatMode,
-    pub(crate) repair: ExfatRepair,
+pub(crate) struct Opt {
+    pub(crate) mode: OpenMode,
+    pub(crate) repair: RepairMode,
     pub(crate) noatime: bool,
-    pub(crate) dmask: exfat::ExfatStatMode,
-    pub(crate) fmask: exfat::ExfatStatMode,
+    pub(crate) dmask: crate::exfat::StatMode,
+    pub(crate) fmask: crate::exfat::StatMode,
     pub(crate) uid: u32,
     pub(crate) gid: u32,
-    pub(crate) nidalloc: ExfatNidAlloc,
+    pub(crate) nidalloc: NidAllocMode,
     pub(crate) debug: bool,
 }
 
-impl ExfatOption {
+impl Opt {
     fn newopt() -> getopts::Options {
         let mut gopt = getopts::Options::new();
         gopt.optopt("", "mode", "", "<rw|ro|any>");
@@ -50,8 +48,9 @@ impl ExfatOption {
         gopt
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn new(args: &[&str]) -> nix::Result<Self> {
-        let gopt = ExfatOption::newopt();
+        let gopt = Opt::newopt();
         let matches = match gopt.parse(args) {
             Ok(v) => v,
             Err(e) => {
@@ -65,25 +64,25 @@ impl ExfatOption {
         }
         let mode = match matches.opt_str("mode") {
             Some(v) => match v.as_str() {
-                "rw" => ExfatMode::Rw,
-                "ro" => ExfatMode::Ro,
-                "any" => ExfatMode::Any, // "ro_fallback" in relan/exfat
+                "rw" => OpenMode::Rw,
+                "ro" => OpenMode::Ro,
+                "any" => OpenMode::Any, // "ro_fallback" in relan/exfat
                 _ => return Err(nix::errno::Errno::EINVAL),
             },
-            None => ExfatMode::Rw,
+            None => OpenMode::Rw,
         };
         let repair = match matches.opt_str("repair") {
             Some(v) => match v.as_str() {
-                "yes" => ExfatRepair::Yes,
-                "no" => ExfatRepair::No,
-                "ask" => ExfatRepair::Ask,
+                "yes" => RepairMode::Yes,
+                "no" => RepairMode::No,
+                "ask" => RepairMode::Ask,
                 _ => return Err(nix::errno::Errno::EINVAL),
             },
-            None => ExfatRepair::No,
+            None => RepairMode::No,
         };
         let noatime = matches.opt_present("noatime");
         let umask = match matches.opt_str("umask") {
-            Some(v) => match exfat::ExfatStatMode::from_str_radix(&v, 8) {
+            Some(v) => match crate::exfat::StatMode::from_str_radix(&v, 8) {
                 Ok(v) => v,
                 Err(e) => {
                     log::error!("{e}");
@@ -93,7 +92,7 @@ impl ExfatOption {
             None => 0,
         };
         let dmask = match matches.opt_str("dmask") {
-            Some(v) => match exfat::ExfatStatMode::from_str_radix(&v, 8) {
+            Some(v) => match crate::exfat::StatMode::from_str_radix(&v, 8) {
                 Ok(v) => v,
                 Err(e) => {
                     log::error!("{e}");
@@ -103,7 +102,7 @@ impl ExfatOption {
             None => umask,
         };
         let fmask = match matches.opt_str("fmask") {
-            Some(v) => match exfat::ExfatStatMode::from_str_radix(&v, 8) {
+            Some(v) => match crate::exfat::StatMode::from_str_radix(&v, 8) {
                 Ok(v) => v,
                 Err(e) => {
                     log::error!("{e}");
@@ -134,11 +133,11 @@ impl ExfatOption {
         };
         let nidalloc = match matches.opt_str("nidalloc") {
             Some(v) => match v.as_str() {
-                "linear" => ExfatNidAlloc::Linear,
-                "bitmap" => ExfatNidAlloc::Bitmap,
+                "linear" => NidAllocMode::Linear,
+                "bitmap" => NidAllocMode::Bitmap,
                 _ => return Err(nix::errno::Errno::EINVAL),
             },
-            None => ExfatNidAlloc::Linear,
+            None => NidAllocMode::Linear,
         };
 
         let debug = matches.opt_present("debug");
@@ -160,31 +159,31 @@ impl ExfatOption {
 mod tests {
     #[test]
     fn test_opt_mode() {
-        match super::ExfatOption::new(&["--mode", "rw"]) {
+        match super::Opt::new(&["--mode", "rw"]) {
             Ok(v) => match v.mode {
-                super::ExfatMode::Rw => (),
+                super::OpenMode::Rw => (),
                 v => panic!("{v:?}"),
             },
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--mode", "ro"]) {
+        match super::Opt::new(&["--mode", "ro"]) {
             Ok(v) => match v.mode {
-                super::ExfatMode::Ro => (),
+                super::OpenMode::Ro => (),
                 v => panic!("{v:?}"),
             },
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--mode", "any"]) {
+        match super::Opt::new(&["--mode", "any"]) {
             Ok(v) => match v.mode {
-                super::ExfatMode::Any => (),
+                super::OpenMode::Any => (),
                 v => panic!("{v:?}"),
             },
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--mode", "xxx"]) {
+        match super::Opt::new(&["--mode", "xxx"]) {
             Ok(v) => panic!("{v:?}"),
             Err(nix::errno::Errno::EINVAL) => (),
             Err(e) => panic!("{e}"),
@@ -193,31 +192,31 @@ mod tests {
 
     #[test]
     fn test_opt_repair() {
-        match super::ExfatOption::new(&["--repair", "yes"]) {
+        match super::Opt::new(&["--repair", "yes"]) {
             Ok(v) => match v.repair {
-                super::ExfatRepair::Yes => (),
+                super::RepairMode::Yes => (),
                 v => panic!("{v:?}"),
             },
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--repair", "no"]) {
+        match super::Opt::new(&["--repair", "no"]) {
             Ok(v) => match v.repair {
-                super::ExfatRepair::No => (),
+                super::RepairMode::No => (),
                 v => panic!("{v:?}"),
             },
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--repair", "ask"]) {
+        match super::Opt::new(&["--repair", "ask"]) {
             Ok(v) => match v.repair {
-                super::ExfatRepair::Ask => (),
+                super::RepairMode::Ask => (),
                 v => panic!("{v:?}"),
             },
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--repair", "xxx"]) {
+        match super::Opt::new(&["--repair", "xxx"]) {
             Ok(v) => panic!("{v:?}"),
             Err(nix::errno::Errno::EINVAL) => (),
             Err(e) => panic!("{e}"),
@@ -226,12 +225,12 @@ mod tests {
 
     #[test]
     fn test_opt_noatime() {
-        match super::ExfatOption::new(&["--noatime"]) {
+        match super::Opt::new(&["--noatime"]) {
             Ok(v) => assert!(v.noatime),
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&[]) {
+        match super::Opt::new(&[]) {
             Ok(v) => assert!(!v.noatime),
             Err(e) => panic!("{e}"),
         }
@@ -239,17 +238,17 @@ mod tests {
 
     #[test]
     fn test_opt_dmask() {
-        match super::ExfatOption::new(&["--dmask", "022"]) {
+        match super::Opt::new(&["--dmask", "022"]) {
             Ok(v) => assert_eq!(v.dmask, 0o022),
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--umask", "777"]) {
+        match super::Opt::new(&["--umask", "777"]) {
             Ok(v) => assert_eq!(v.dmask, 0o777),
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&[]) {
+        match super::Opt::new(&[]) {
             Ok(v) => assert_eq!(v.dmask, 0),
             Err(e) => panic!("{e}"),
         }
@@ -257,17 +256,17 @@ mod tests {
 
     #[test]
     fn test_opt_fmask() {
-        match super::ExfatOption::new(&["--fmask", "644"]) {
+        match super::Opt::new(&["--fmask", "644"]) {
             Ok(v) => assert_eq!(v.fmask, 0o644),
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--umask", "777"]) {
+        match super::Opt::new(&["--umask", "777"]) {
             Ok(v) => assert_eq!(v.fmask, 0o777),
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&[]) {
+        match super::Opt::new(&[]) {
             Ok(v) => assert_eq!(v.fmask, 0),
             Err(e) => panic!("{e}"),
         }
@@ -275,12 +274,12 @@ mod tests {
 
     #[test]
     fn test_opt_uid() {
-        match super::ExfatOption::new(&["--uid", "123"]) {
+        match super::Opt::new(&["--uid", "123"]) {
             Ok(v) => assert_eq!(v.uid, 123),
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&[]) {
+        match super::Opt::new(&[]) {
             Ok(v) => assert_eq!(v.uid, nix::unistd::geteuid().as_raw()),
             Err(e) => panic!("{e}"),
         }
@@ -288,12 +287,12 @@ mod tests {
 
     #[test]
     fn test_opt_gid() {
-        match super::ExfatOption::new(&["--gid", "456"]) {
+        match super::Opt::new(&["--gid", "456"]) {
             Ok(v) => assert_eq!(v.gid, 456),
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&[]) {
+        match super::Opt::new(&[]) {
             Ok(v) => assert_eq!(v.gid, nix::unistd::getegid().as_raw()),
             Err(e) => panic!("{e}"),
         }
@@ -301,23 +300,23 @@ mod tests {
 
     #[test]
     fn test_opt_nidalloc() {
-        match super::ExfatOption::new(&["--nidalloc", "linear"]) {
+        match super::Opt::new(&["--nidalloc", "linear"]) {
             Ok(v) => match v.nidalloc {
-                super::ExfatNidAlloc::Linear => (),
-                v @ super::ExfatNidAlloc::Bitmap => panic!("{v:?}"),
+                super::NidAllocMode::Linear => (),
+                v @ super::NidAllocMode::Bitmap => panic!("{v:?}"),
             },
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--nidalloc", "bitmap"]) {
+        match super::Opt::new(&["--nidalloc", "bitmap"]) {
             Ok(v) => match v.nidalloc {
-                super::ExfatNidAlloc::Bitmap => (),
-                v @ super::ExfatNidAlloc::Linear => panic!("{v:?}"),
+                super::NidAllocMode::Bitmap => (),
+                v @ super::NidAllocMode::Linear => panic!("{v:?}"),
             },
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--nidalloc", "xxx"]) {
+        match super::Opt::new(&["--nidalloc", "xxx"]) {
             Ok(v) => panic!("{v:?}"),
             Err(nix::errno::Errno::EINVAL) => (),
             Err(e) => panic!("{e}"),
@@ -326,13 +325,13 @@ mod tests {
 
     #[test]
     fn test_opt_help() {
-        match super::ExfatOption::new(&["-h"]) {
+        match super::Opt::new(&["-h"]) {
             Ok(v) => panic!("{v:?}"),
             Err(nix::errno::Errno::UnknownErrno) => (),
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&["--h"]) {
+        match super::Opt::new(&["--h"]) {
             Ok(v) => panic!("{v:?}"),
             Err(nix::errno::Errno::UnknownErrno) => (),
             Err(e) => panic!("{e}"),
@@ -341,12 +340,12 @@ mod tests {
 
     #[test]
     fn test_opt_debug() {
-        match super::ExfatOption::new(&["--debug"]) {
+        match super::Opt::new(&["--debug"]) {
             Ok(v) => assert!(v.debug),
             Err(e) => panic!("{e}"),
         }
 
-        match super::ExfatOption::new(&[]) {
+        match super::Opt::new(&[]) {
             Ok(v) => assert!(!v.debug),
             Err(e) => panic!("{e}"),
         }

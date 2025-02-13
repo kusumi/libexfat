@@ -1,3 +1,15 @@
+macro_rules! wc_to_u8 {
+    ($x:expr) => {
+        u8::try_from($x).unwrap()
+    };
+}
+
+macro_rules! wc_to_u16 {
+    ($x:expr) => {
+        u16::try_from($x).unwrap().to_le()
+    };
+}
+
 fn utf16_to_wchar(input: &[u16], wc: &mut u64, insize: usize) -> isize {
     if (u16::from_le(input[0]) & 0xfc00) == 0xd800 {
         if insize < 2 || (u16::from_le(input[1]) & 0xfc00) != 0xdc00 {
@@ -24,46 +36,46 @@ fn wchar_to_utf8(output: &mut [u8], wc: u64, outsize: usize) -> isize {
         if outsize < 2 {
             return -1;
         }
-        output[0] = u8::try_from(0xc0 | (wc >> 6)).unwrap();
-        output[1] = u8::try_from(0x80 | (wc & 0x3f)).unwrap();
+        output[0] = wc_to_u8!(0xc0 | (wc >> 6));
+        output[1] = wc_to_u8!(0x80 | (wc & 0x3f));
         2
     } else if wc <= 0xffff {
         if outsize < 3 {
             return -1;
         }
-        output[0] = u8::try_from(0xe0 | (wc >> 12)).unwrap();
-        output[1] = u8::try_from(0x80 | ((wc >> 6) & 0x3f)).unwrap();
-        output[2] = u8::try_from(0x80 | (wc & 0x3f)).unwrap();
+        output[0] = wc_to_u8!(0xe0 | (wc >> 12));
+        output[1] = wc_to_u8!(0x80 | ((wc >> 6) & 0x3f));
+        output[2] = wc_to_u8!(0x80 | (wc & 0x3f));
         3
     } else if wc <= 0x001f_ffff {
         if outsize < 4 {
             return -1;
         }
-        output[0] = u8::try_from(0xf0 | (wc >> 18)).unwrap();
-        output[1] = u8::try_from(0x80 | ((wc >> 12) & 0x3f)).unwrap();
-        output[2] = u8::try_from(0x80 | ((wc >> 6) & 0x3f)).unwrap();
-        output[3] = u8::try_from(0x80 | (wc & 0x3f)).unwrap();
+        output[0] = wc_to_u8!(0xf0 | (wc >> 18));
+        output[1] = wc_to_u8!(0x80 | ((wc >> 12) & 0x3f));
+        output[2] = wc_to_u8!(0x80 | ((wc >> 6) & 0x3f));
+        output[3] = wc_to_u8!(0x80 | (wc & 0x3f));
         4
     } else if wc <= 0x03ff_ffff {
         if outsize < 5 {
             return -1;
         }
-        output[0] = u8::try_from(0xf8 | (wc >> 24)).unwrap();
-        output[1] = u8::try_from(0x80 | ((wc >> 18) & 0x3f)).unwrap();
-        output[2] = u8::try_from(0x80 | ((wc >> 12) & 0x3f)).unwrap();
-        output[3] = u8::try_from(0x80 | ((wc >> 6) & 0x3f)).unwrap();
-        output[4] = u8::try_from(0x80 | (wc & 0x3f)).unwrap();
+        output[0] = wc_to_u8!(0xf8 | (wc >> 24));
+        output[1] = wc_to_u8!(0x80 | ((wc >> 18) & 0x3f));
+        output[2] = wc_to_u8!(0x80 | ((wc >> 12) & 0x3f));
+        output[3] = wc_to_u8!(0x80 | ((wc >> 6) & 0x3f));
+        output[4] = wc_to_u8!(0x80 | (wc & 0x3f));
         5
     } else if wc <= 0x7fff_ffff {
         if outsize < 6 {
             return -1;
         }
-        output[0] = u8::try_from(0xfc | (wc >> 30)).unwrap();
-        output[1] = u8::try_from(0x80 | ((wc >> 24) & 0x3f)).unwrap();
-        output[2] = u8::try_from(0x80 | ((wc >> 18) & 0x3f)).unwrap();
-        output[3] = u8::try_from(0x80 | ((wc >> 12) & 0x3f)).unwrap();
-        output[4] = u8::try_from(0x80 | ((wc >> 6) & 0x3f)).unwrap();
-        output[5] = u8::try_from(0x80 | (wc & 0x3f)).unwrap();
+        output[0] = wc_to_u8!(0xfc | (wc >> 30));
+        output[1] = wc_to_u8!(0x80 | ((wc >> 24) & 0x3f));
+        output[2] = wc_to_u8!(0x80 | ((wc >> 18) & 0x3f));
+        output[3] = wc_to_u8!(0x80 | ((wc >> 12) & 0x3f));
+        output[4] = wc_to_u8!(0x80 | ((wc >> 6) & 0x3f));
+        output[5] = wc_to_u8!(0x80 | (wc & 0x3f));
         6
     } else {
         -1
@@ -154,7 +166,7 @@ fn wchar_to_utf16(output: &mut [u16], wc: u64, outsize: usize) -> isize {
         if outsize == 0 {
             return -1;
         }
-        output[0] = u16::try_from(wc).unwrap().to_le();
+        output[0] = wc_to_u16!(wc);
         return 1;
     }
 
@@ -164,10 +176,8 @@ fn wchar_to_utf16(output: &mut [u16], wc: u64, outsize: usize) -> isize {
 
     let mut wc = wc;
     wc -= 0x10000;
-    output[0] = u16::try_from(0xd800 | ((wc >> 10) & 0x3ff))
-        .unwrap()
-        .to_le();
-    output[1] = u16::try_from(0xdc00 | (wc & 0x3ff)).unwrap().to_le();
+    output[0] = wc_to_u16!(0xd800 | ((wc >> 10) & 0x3ff));
+    output[1] = wc_to_u16!(0xdc00 | (wc & 0x3ff));
     2
 }
 
@@ -238,7 +248,13 @@ mod tests {
             Err(e) => panic!("{e}"),
         };
         for i in 1..=127 {
-            assert_eq!(output[i - 1], i.try_into().unwrap());
+            assert_eq!(
+                output[i - 1],
+                match i.try_into() {
+                    Ok(v) => v,
+                    Err(e) => panic!("{e}"),
+                }
+            );
         }
     }
 
@@ -267,7 +283,13 @@ mod tests {
             Err(e) => panic!("{e}"),
         };
         for i in 1..=127 {
-            assert_eq!(output[i - 1], i.try_into().unwrap());
+            assert_eq!(
+                output[i - 1],
+                match i.try_into() {
+                    Ok(v) => v,
+                    Err(e) => panic!("{e}"),
+                }
+            );
         }
     }
 
@@ -282,7 +304,10 @@ mod tests {
         };
         let mut b = vec![];
         for x in &output {
-            b.push((*x).try_into().unwrap());
+            b.push(match (*x).try_into() {
+                Ok(v) => v,
+                Err(e) => panic!("{e}"),
+            });
         }
         assert_eq!(std::str::from_utf8(&b), Ok("exFAT"));
     }

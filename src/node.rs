@@ -1,9 +1,3 @@
-use crate::exfat;
-use crate::fs;
-use crate::time;
-use crate::utf;
-use crate::util;
-
 pub type Nid = u64;
 
 pub(crate) const NID_NONE: Nid = 0;
@@ -11,7 +5,7 @@ pub(crate) const NID_ROOT: Nid = 1;
 pub(crate) const NID_NODE_OFFSET: Nid = 2;
 
 #[derive(Debug)]
-pub struct ExfatNode {
+pub struct Node {
     pub(crate) references: isize,
     pub(crate) fptr_index: u32,
     pub(crate) fptr_cluster: u32,
@@ -33,7 +27,7 @@ pub struct ExfatNode {
     pub(crate) cnids: Vec<Nid>, // Rust
 }
 
-impl ExfatNode {
+impl Node {
     pub(crate) fn new_root() -> Self {
         Self::new(NID_ROOT)
     }
@@ -129,57 +123,58 @@ impl ExfatNode {
 
     #[must_use]
     pub fn is_directory(&self) -> bool {
-        (self.attrib & fs::EXFAT_ATTRIB_DIR) != 0
+        (self.attrib & crate::fs::EXFAT_ATTRIB_DIR) != 0
     }
 
-    pub(crate) fn init_meta1(&mut self, meta1: &fs::ExfatEntryMeta1) {
+    pub(crate) fn init_meta1(&mut self, meta1: &crate::fs::ExfatEntryMeta1) {
         self.attrib = u16::from_le(meta1.attrib);
         self.continuations = meta1.continuations;
-        self.mtime = time::exfat2unix(meta1.mdate, meta1.mtime, meta1.mtime_cs, meta1.mtime_tzo);
+        self.mtime =
+            crate::time::exfat2unix(meta1.mdate, meta1.mtime, meta1.mtime_cs, meta1.mtime_tzo);
         // there is no centiseconds field for atime
-        self.atime = time::exfat2unix(meta1.adate, meta1.atime, 0, meta1.atime_tzo);
+        self.atime = crate::time::exfat2unix(meta1.adate, meta1.atime, 0, meta1.atime_tzo);
     }
 
-    pub(crate) fn init_meta2(&mut self, meta2: &fs::ExfatEntryMeta2) {
+    pub(crate) fn init_meta2(&mut self, meta2: &crate::fs::ExfatEntryMeta2) {
         self.valid_size = u64::from_le(meta2.valid_size);
         self.size = u64::from_le(meta2.size);
         self.start_cluster = u32::from_le(meta2.start_cluster);
         self.fptr_cluster = self.start_cluster;
-        self.is_contiguous = (meta2.flags & fs::EXFAT_FLAG_CONTIGUOUS) != 0;
+        self.is_contiguous = (meta2.flags & crate::fs::EXFAT_FLAG_CONTIGUOUS) != 0;
     }
 
-    pub(crate) fn init_name(&mut self, entries: &[fs::ExfatEntry], n: usize) {
+    pub(crate) fn init_name(&mut self, entries: &[crate::fs::ExfatEntry], n: usize) {
         // u16 name
         assert!(self.name.is_empty());
         for entry in entries.iter().take(n) {
-            let entry: &fs::ExfatEntryName = bytemuck::cast_ref(entry);
+            let entry: &crate::fs::ExfatEntryName = bytemuck::cast_ref(entry);
             self.name.extend_from_slice(&entry.name);
         }
-        assert_eq!(self.name.len(), fs::EXFAT_ENAME_MAX * n);
+        assert_eq!(self.name.len(), crate::fs::EXFAT_ENAME_MAX * n);
         // string name
-        let output = utf::utf16_to_utf8(
+        let output = crate::utf::utf16_to_utf8(
             &self.name,
-            exfat::EXFAT_UTF8_NAME_BUFFER_MAX,
+            crate::exfat::UTF8_NAME_BUFFER_MAX,
             self.name.len(),
         )
         .unwrap();
         assert!(self.strname.is_empty());
-        self.strname = util::bin_to_string(&output).unwrap();
+        self.strname = crate::util::bin_to_string(&output).unwrap();
     }
 
-    pub(crate) fn update_name(&mut self, entries: &[fs::ExfatEntry], n: usize) {
+    pub(crate) fn update_name(&mut self, entries: &[crate::fs::ExfatEntry], n: usize) {
         self.name.clear();
         self.strname.clear();
         self.init_name(entries, n);
     }
 
     pub(crate) fn update_atime(&mut self) {
-        self.atime = util::get_current_time();
+        self.atime = crate::util::get_current_time();
         self.is_dirty = true;
     }
 
     pub(crate) fn update_mtime(&mut self) {
-        self.mtime = util::get_current_time();
+        self.mtime = crate::util::get_current_time();
         self.is_dirty = true;
     }
 
@@ -207,7 +202,7 @@ impl ExfatNode {
 mod tests {
     #[test]
     fn test_node_nid() {
-        let node = super::ExfatNode::new_root();
+        let node = super::Node::new_root();
         assert_eq!(node.nid, super::NID_ROOT);
         assert_eq!(node.pnid, super::NID_NONE);
         assert_eq!(node.cnids.len(), 0);
@@ -215,7 +210,7 @@ mod tests {
 
     #[test]
     fn test_node_get_put() {
-        let mut node = super::ExfatNode::new_root();
+        let mut node = super::Node::new_root();
         assert_eq!(node.references, 0);
         node.get();
         assert_eq!(node.references, 1);
@@ -229,13 +224,13 @@ mod tests {
 
     #[test]
     fn test_node_get_name() {
-        let node = super::ExfatNode::new_root();
+        let node = super::Node::new_root();
         assert_eq!(node.get_name(), "");
     }
 
     #[test]
     fn test_node_update_atime() {
-        let mut node = super::ExfatNode::new_root();
+        let mut node = super::Node::new_root();
         assert_eq!(node.atime, 0);
         assert!(!node.is_dirty);
 
@@ -246,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_node_update_mtime() {
-        let mut node = super::ExfatNode::new_root();
+        let mut node = super::Node::new_root();
         assert_eq!(node.mtime, 0);
         assert!(!node.is_dirty);
 

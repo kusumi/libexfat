@@ -1,5 +1,3 @@
-use crate::util;
-
 // size_t in relan/exfat, but u8 is easier to handle in Rust.
 #[cfg(not(feature = "bitmap_u64"))]
 pub(crate) type Bitmap = u8;
@@ -16,7 +14,7 @@ pub fn alloc(count: usize) -> Vec<Bitmap> {
 
 #[must_use]
 pub(crate) fn round_up(count: usize) -> usize {
-    util::round_up!(count, SIZE_BITS)
+    crate::util::round_up!(count, SIZE_BITS)
 }
 
 #[must_use]
@@ -46,7 +44,7 @@ pub(crate) fn clear(bitmap: &mut [Bitmap], index: usize) {
 
 pub(crate) fn find_and_set(bitmap: &mut [Bitmap], start: usize, end: usize) -> usize {
     let start_index = start / SIZE_BITS;
-    let end_index = util::div_round_up!(end, SIZE_BITS); // not inclusive
+    let end_index = crate::util::div_round_up!(end, SIZE_BITS); // not inclusive
 
     for i in start_index..end_index {
         if bitmap[i] == Bitmap::MAX {
@@ -68,7 +66,7 @@ pub(crate) fn count(bitmap: &[Bitmap]) -> usize {
     let start = 0;
     let end = bitmap.len() * SIZE_BITS; // not inclusive
     let start_index = start / SIZE_BITS;
-    let end_index = util::div_round_up!(end, SIZE_BITS);
+    let end_index = crate::util::div_round_up!(end, SIZE_BITS);
     let mut total = 0;
 
     for i in start_index..end_index {
@@ -273,6 +271,7 @@ mod tests {
         assert_eq!(super::get(&b, super::SIZE_BITS + 2), 4);
     }
 
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn test_set() {
         let mut b = [0];
@@ -390,6 +389,7 @@ mod tests {
         assert_eq!(super::get(&b, super::SIZE_BITS + 2), 4);
     }
 
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn test_clear() {
         let mut b = [0];
@@ -507,6 +507,7 @@ mod tests {
         assert_eq!(super::get(&b, super::SIZE_BITS + 2), 0);
     }
 
+    #[allow(clippy::too_many_lines)]
     #[test]
     fn test_find_and_set() {
         let mut b = [0];

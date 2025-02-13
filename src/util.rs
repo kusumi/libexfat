@@ -1,12 +1,10 @@
-use crate::fs;
-
 use std::io::Seek;
 
 #[allow(unused_macros)]
 #[macro_export]
 macro_rules! div_round_up {
     ($x:expr, $d:expr) => {
-        ($x + $d - 1) / $d
+        $x.div_ceil($d)
     };
 }
 pub use div_round_up;
@@ -20,6 +18,7 @@ macro_rules! round_up {
 }
 pub use round_up;
 
+// div_floor is nightly-only as of 1.84.1
 #[allow(unused_macros)]
 #[macro_export]
 macro_rules! div_round_down {
@@ -51,8 +50,8 @@ fn add_checksum_bytes(sum: u16, buf: &[u8], n: usize) -> u16 {
 }
 
 // relan/exfat takes exfat_entry_meta1*
-fn start_checksum(entry: &fs::ExfatEntry) -> u16 {
-    let buf: &[u8; fs::EXFAT_ENTRY_SIZE] = bytemuck::cast_ref(entry);
+fn start_checksum(entry: &crate::fs::ExfatEntry) -> u16 {
+    let buf: &[u8; crate::fs::EXFAT_ENTRY_SIZE] = bytemuck::cast_ref(entry);
     let mut sum = 0;
     for (i, b) in buf.iter().enumerate() {
         // skip checksum field itself
@@ -64,13 +63,13 @@ fn start_checksum(entry: &fs::ExfatEntry) -> u16 {
 }
 
 fn add_checksum(entry: &[u8], sum: u16) -> u16 {
-    add_checksum_bytes(sum, entry, fs::EXFAT_ENTRY_SIZE)
+    add_checksum_bytes(sum, entry, crate::fs::EXFAT_ENTRY_SIZE)
 }
 
-pub(crate) fn calc_checksum(entries: &[fs::ExfatEntry], n: usize) -> u16 {
+pub(crate) fn calc_checksum(entries: &[crate::fs::ExfatEntry], n: usize) -> u16 {
     let mut checksum = start_checksum(&entries[0]);
     for x in entries.iter().take(n).skip(1) {
-        let buf: &[u8; fs::EXFAT_ENTRY_SIZE] = bytemuck::cast_ref(x);
+        let buf: &[u8; crate::fs::EXFAT_ENTRY_SIZE] = bytemuck::cast_ref(x);
         checksum = add_checksum(buf, checksum);
     }
     checksum.to_le()
@@ -136,14 +135,13 @@ pub fn humanize_bytes(value: u64) -> (u64, String) {
 }
 
 pub(crate) fn bin_to_string(b: &[u8]) -> Result<String, std::string::FromUtf8Error> {
-    let mut v = vec![];
-    for x in b {
-        if *x == 0 {
-            break;
+    String::from_utf8(
+        match b.iter().position(|&x| x == 0) {
+            Some(v) => &b[..v],
+            None => b,
         }
-        v.push(*x);
-    }
-    String::from_utf8(v)
+        .to_vec(),
+    )
 }
 
 pub(crate) fn get_current_time() -> u64 {
@@ -159,10 +157,6 @@ pub(crate) fn seek_set(fp: &mut std::fs::File, offset: u64) -> std::io::Result<u
 
 pub(crate) fn seek_end(fp: &mut std::fs::File, offset: i64) -> std::io::Result<u64> {
     fp.seek(std::io::SeekFrom::End(offset))
-}
-
-pub(crate) fn seek_cur(fp: &mut std::fs::File, offset: i64) -> std::io::Result<u64> {
-    fp.seek(std::io::SeekFrom::Current(offset))
 }
 
 pub(crate) fn read_line() -> std::io::Result<String> {
@@ -189,17 +183,6 @@ pub fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     }
 }
 
-#[must_use]
-pub fn error2errno(e: std::io::Error) -> nix::errno::Errno {
-    match nix::errno::Errno::try_from(e) {
-        Ok(v) => v,
-        Err(e) => {
-            log::error!("{e}");
-            nix::errno::Errno::EIO
-        }
-    }
-}
-
 pub(crate) fn get_os_name() -> &'static str {
     std::env::consts::OS
 }
@@ -223,18 +206,34 @@ pub fn is_solaris() -> bool {
 mod tests {
     #[test]
     fn test_div_round_up() {
-        assert_eq!(super::div_round_up!(1, 1), 1);
-        assert_eq!(super::div_round_up!(2, 1), 2);
-        assert_eq!(super::div_round_up!(1024, 1024), 1);
-        assert_eq!(super::div_round_up!(1025, 1024), 2);
+        assert_eq!(super::div_round_up!(1_u32, 1), 1);
+        assert_eq!(super::div_round_up!(2_u32, 1), 2);
+        assert_eq!(super::div_round_up!(1024_u32, 1024), 1);
+        assert_eq!(super::div_round_up!(1025_u32, 1024), 2);
     }
 
     #[test]
     fn test_round_up() {
-        assert_eq!(super::round_up!(1, 1), 1);
-        assert_eq!(super::round_up!(2, 1), 2);
-        assert_eq!(super::round_up!(1024, 1024), 1024);
-        assert_eq!(super::round_up!(1025, 1024), 2048);
+        assert_eq!(super::round_up!(1_u32, 1), 1);
+        assert_eq!(super::round_up!(2_u32, 1), 2);
+        assert_eq!(super::round_up!(1024_u32, 1024), 1024);
+        assert_eq!(super::round_up!(1025_u32, 1024), 2048);
+    }
+
+    #[test]
+    fn test_div_round_down() {
+        assert_eq!(super::div_round_down!(1_u32, 1), 1);
+        assert_eq!(super::div_round_down!(2_u32, 1), 2);
+        assert_eq!(super::div_round_down!(1024_u32, 1024), 1);
+        assert_eq!(super::div_round_down!(1025_u32, 1024), 1);
+    }
+
+    #[test]
+    fn test_round_down() {
+        assert_eq!(super::round_down!(1_u32, 1), 1);
+        assert_eq!(super::round_down!(2_u32, 1), 2);
+        assert_eq!(super::round_down!(1024_u32, 1024), 1024);
+        assert_eq!(super::round_down!(1025_u32, 1024), 1024);
     }
 
     #[test]
