@@ -1,12 +1,5 @@
-FEATURES	=
-
-USE_BITMAP_U64	?= 0
-ifeq (${USE_BITMAP_U64}, 1)
-	FEATURES	+= --features=bitmap_u64
-endif
-
 bin:
-	cargo build --release ${FEATURES}
+	cargo build --release
 clean:
 	cargo clean --release -p libexfat
 clean_all:
@@ -15,14 +8,14 @@ fmt:
 	cargo fmt
 	git status
 lint:
-	cargo clippy --release --fix --all ${FEATURES}
+	cargo clippy --release --fix --all
 	git status
 plint:
-	cargo clippy --release --fix --all ${FEATURES} -- -W clippy::pedantic
+	cargo clippy --release --fix --all -- -W clippy::pedantic
 	git status
 test:
-	cargo test --release ${FEATURES}
+	cargo test --release
 test_debug:
-	cargo test --release ${FEATURES} -- --nocapture
+	cargo test --release -- --nocapture
 
 xxx:	fmt lint test

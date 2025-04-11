@@ -205,7 +205,7 @@ mod tests {
         let node = super::Node::new_root();
         assert_eq!(node.nid, super::NID_ROOT);
         assert_eq!(node.pnid, super::NID_NONE);
-        assert_eq!(node.cnids.len(), 0);
+        assert!(node.cnids.is_empty());
     }
 
     #[test]

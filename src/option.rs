@@ -139,7 +139,6 @@ impl Opt {
             },
             None => NidAllocMode::Linear,
         };
-
         let debug = matches.opt_present("debug");
         Ok(Self {
             mode,
@@ -166,7 +165,6 @@ mod tests {
             },
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--mode", "ro"]) {
             Ok(v) => match v.mode {
                 super::OpenMode::Ro => (),
@@ -174,7 +172,6 @@ mod tests {
             },
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--mode", "any"]) {
             Ok(v) => match v.mode {
                 super::OpenMode::Any => (),
@@ -182,7 +179,6 @@ mod tests {
             },
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--mode", "xxx"]) {
             Ok(v) => panic!("{v:?}"),
             Err(nix::errno::Errno::EINVAL) => (),
@@ -199,7 +195,6 @@ mod tests {
             },
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--repair", "no"]) {
             Ok(v) => match v.repair {
                 super::RepairMode::No => (),
@@ -207,7 +202,6 @@ mod tests {
             },
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--repair", "ask"]) {
             Ok(v) => match v.repair {
                 super::RepairMode::Ask => (),
@@ -215,7 +209,6 @@ mod tests {
             },
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--repair", "xxx"]) {
             Ok(v) => panic!("{v:?}"),
             Err(nix::errno::Errno::EINVAL) => (),
@@ -229,7 +222,6 @@ mod tests {
             Ok(v) => assert!(v.noatime),
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&[]) {
             Ok(v) => assert!(!v.noatime),
             Err(e) => panic!("{e}"),
@@ -242,12 +234,10 @@ mod tests {
             Ok(v) => assert_eq!(v.dmask, 0o022),
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--umask", "777"]) {
             Ok(v) => assert_eq!(v.dmask, 0o777),
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&[]) {
             Ok(v) => assert_eq!(v.dmask, 0),
             Err(e) => panic!("{e}"),
@@ -260,12 +250,10 @@ mod tests {
             Ok(v) => assert_eq!(v.fmask, 0o644),
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--umask", "777"]) {
             Ok(v) => assert_eq!(v.fmask, 0o777),
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&[]) {
             Ok(v) => assert_eq!(v.fmask, 0),
             Err(e) => panic!("{e}"),
@@ -278,7 +266,6 @@ mod tests {
             Ok(v) => assert_eq!(v.uid, 123),
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&[]) {
             Ok(v) => assert_eq!(v.uid, nix::unistd::geteuid().as_raw()),
             Err(e) => panic!("{e}"),
@@ -291,7 +278,6 @@ mod tests {
             Ok(v) => assert_eq!(v.gid, 456),
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&[]) {
             Ok(v) => assert_eq!(v.gid, nix::unistd::getegid().as_raw()),
             Err(e) => panic!("{e}"),
@@ -307,7 +293,6 @@ mod tests {
             },
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--nidalloc", "bitmap"]) {
             Ok(v) => match v.nidalloc {
                 super::NidAllocMode::Bitmap => (),
@@ -315,7 +300,6 @@ mod tests {
             },
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--nidalloc", "xxx"]) {
             Ok(v) => panic!("{v:?}"),
             Err(nix::errno::Errno::EINVAL) => (),
@@ -330,7 +314,6 @@ mod tests {
             Err(nix::errno::Errno::UnknownErrno) => (),
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&["--h"]) {
             Ok(v) => panic!("{v:?}"),
             Err(nix::errno::Errno::UnknownErrno) => (),
@@ -344,7 +327,6 @@ mod tests {
             Ok(v) => assert!(v.debug),
             Err(e) => panic!("{e}"),
         }
-
         match super::Opt::new(&[]) {
             Ok(v) => assert!(!v.debug),
             Err(e) => panic!("{e}"),

@@ -112,19 +112,19 @@ impl crate::exfat::Exfat {
         crate::node::Node::new(crate::node::NID_NONE)
     }
 
-    pub(crate) fn get_nid(&mut self) -> nix::Result<crate::node::Nid> {
+    pub(crate) fn alloc_nid(&mut self) -> nix::Result<crate::node::Nid> {
         assert!(self.imap.next >= crate::node::NID_NODE_OFFSET);
         assert_ne!(self.imap.max, 0);
         let nid = match self.opt.nidalloc {
-            crate::option::NidAllocMode::Linear => self.get_nidmap_linear()?,
-            crate::option::NidAllocMode::Bitmap => self.get_nidmap_bitmap()?,
+            crate::option::NidAllocMode::Linear => self.alloc_nidmap_linear()?,
+            crate::option::NidAllocMode::Bitmap => self.alloc_nidmap_bitmap()?,
         };
         assert_ne!(nid, crate::node::NID_NONE);
         assert_ne!(nid, crate::node::NID_ROOT);
         Ok(nid)
     }
 
-    fn get_nidmap_linear(&mut self) -> nix::Result<crate::node::Nid> {
+    fn alloc_nidmap_linear(&mut self) -> nix::Result<crate::node::Nid> {
         if self.imap.next > self.imap.max {
             return Err(nix::errno::Errno::ENOSPC);
         }
@@ -133,7 +133,7 @@ impl crate::exfat::Exfat {
         Ok(nid)
     }
 
-    fn get_nidmap_bitmap(&mut self) -> nix::Result<crate::node::Nid> {
+    fn alloc_nidmap_bitmap(&mut self) -> nix::Result<crate::node::Nid> {
         if let Some(v) = self.imap.pool.pop() {
             crate::bitmap::set(&mut self.imap.chunk, v.try_into().unwrap());
             return Ok(v); // reuse nid in pool
@@ -158,14 +158,14 @@ impl crate::exfat::Exfat {
         Ok(nid)
     }
 
-    pub(crate) fn put_nid(&mut self, nid: crate::node::Nid) {
+    pub(crate) fn free_nid(&mut self, nid: crate::node::Nid) {
         match self.opt.nidalloc {
             crate::option::NidAllocMode::Linear => (),
-            crate::option::NidAllocMode::Bitmap => self.put_nidmap_bitmap(nid),
+            crate::option::NidAllocMode::Bitmap => self.free_nidmap_bitmap(nid),
         }
     }
 
-    fn put_nidmap_bitmap(&mut self, nid: crate::node::Nid) {
+    fn free_nidmap_bitmap(&mut self, nid: crate::node::Nid) {
         const NIDMAP_POOL_MAX: usize = 1 << 8;
         crate::bitmap::clear(&mut self.imap.chunk, nid.try_into().unwrap());
         if self.imap.pool.len() < NIDMAP_POOL_MAX {
@@ -242,6 +242,48 @@ impl crate::exfat::Exfat {
 
     /// # Errors
     /// # Panics
+    pub fn preadx(
+        &mut self,
+        nid: crate::node::Nid,
+        size: u64,
+        offset: u64,
+    ) -> crate::Result<Vec<u8>> {
+        let mut buf = vec![0; size.try_into().unwrap()];
+        let n = self.pread(nid, &mut buf, offset)?;
+        Ok(buf[..n.try_into().unwrap()].to_vec())
+    }
+
+    /// # Errors
+    pub fn read_all(&mut self, nid: crate::node::Nid) -> crate::Result<Vec<u8>> {
+        self.preadx(nid, self.stat(nid)?.st_size, 0)
+    }
+
+    /// # Errors
+    pub fn readdir(&mut self, dnid: crate::node::Nid) -> crate::Result<Vec<crate::node::Nid>> {
+        let mut c = self.opendir_cursor(dnid)?;
+        let mut v = vec![];
+        loop {
+            let nid = match self.readdir_cursor(&mut c) {
+                Ok(v) => v,
+                Err(e) => {
+                    if let crate::Error::Errno(e) = e {
+                        if e == nix::errno::Errno::ENOENT {
+                            break;
+                        }
+                    }
+                    self.closedir_cursor(c);
+                    return Err(e);
+                }
+            };
+            v.push(nid);
+            crate::exfat::get_node_mut!(self, &nid).put();
+        }
+        self.closedir_cursor(c);
+        Ok(v)
+    }
+
+    /// # Errors
+    /// # Panics
     pub fn prune_node(&mut self, xnid: crate::node::Nid) -> crate::Result<(usize, usize)> {
         self.flush_nodes()?;
         self.flush()?;
@@ -254,7 +296,7 @@ impl crate::exfat::Exfat {
         assert!(a >= b);
         let total_pruned = a - b;
 
-        self.dump_node();
+        self.dump_node_all();
 
         let xname = crate::exfat::get_node!(self, &xnid).get_name().to_string();
         self.recache_directory(crate::node::NID_ROOT, &xname)?;
@@ -262,11 +304,7 @@ impl crate::exfat::Exfat {
         assert!(c >= b);
         let total_recached = c - b;
 
-        log::info!(
-            "{} node pruned, {} node recached",
-            total_pruned,
-            total_recached
-        );
+        log::info!("{total_pruned} node pruned, {total_recached} node recached");
         Ok((total_pruned, total_recached))
     }
 
@@ -285,7 +323,7 @@ impl crate::exfat::Exfat {
             }
             match self.prune_node_impl(cnid, xnid) {
                 Ok(()) => {
-                    self.nmap_detach(nid, cnid);
+                    self.nmap_detach(nid, cnid)?;
                 }
                 Err(nix::errno::Errno::EBUSY) => {
                     if nid != crate::node::NID_ROOT {
@@ -306,7 +344,12 @@ impl crate::exfat::Exfat {
         Ok(())
     }
 
-    pub(crate) fn dump_node(&self) {
+    #[allow(dead_code)]
+    pub(crate) fn dump_node(&self, nid: crate::node::Nid) {
+        self.dump_node_impl(nid, 0);
+    }
+
+    pub(crate) fn dump_node_all(&self) {
         self.dump_node_impl(crate::node::NID_ROOT, 0);
     }
 

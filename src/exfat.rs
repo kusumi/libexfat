@@ -2,28 +2,18 @@ use byteorder::ByteOrder;
 use std::io::Write;
 
 macro_rules! get_node {
-    ($self:expr, $nid:expr) => {
-        $self.nmap.get($nid).unwrap()
+    ($ef:expr, $nid:expr) => {
+        $ef.nmap.get($nid).unwrap()
     };
 }
 pub(crate) use get_node;
 
 macro_rules! get_node_mut {
-    ($self:expr, $nid:expr) => {
-        $self.nmap.get_mut($nid).unwrap()
+    ($ef:expr, $nid:expr) => {
+        $ef.nmap.get_mut($nid).unwrap()
     };
 }
 pub(crate) use get_node_mut;
-
-macro_rules! log_or_panic {
-    ($msg:expr, $cond:expr) => {
-        if $cond {
-            panic!("{}", $msg);
-        } else {
-            log::error!("{}", $msg);
-        }
-    };
-}
 
 const NAME_MAX: usize = 255;
 
@@ -146,7 +136,7 @@ impl Drop for Exfat {
 }
 
 impl Exfat {
-    pub(crate) fn new(dev: crate::device::Device, opt: crate::option::Opt) -> Self {
+    fn new(dev: crate::device::Device, opt: crate::option::Opt) -> Self {
         Self {
             opt,
             dev,
@@ -254,10 +244,7 @@ impl Exfat {
             let node_fptr_cluster = self.next_cluster(nid, get_node!(self, &nid).fptr_cluster);
             get_node_mut!(self, &nid).fptr_cluster = node_fptr_cluster;
             if self.cluster_invalid(node_fptr_cluster) {
-                log_or_panic!(
-                    format!("invalid cluster {node_fptr_cluster:#x}"),
-                    self.opt.debug
-                );
+                log::error!("invalid cluster {node_fptr_cluster:#x}");
                 return Err(nix::errno::Errno::EIO);
             }
         }
@@ -373,10 +360,7 @@ impl Exfat {
         let mut allocated = 0;
         let node = get_node!(self, &nid);
 
-        if node.start_cluster != crate::fs::EXFAT_CLUSTER_FREE {
-            // get the last cluster of the file
-            previous = self.advance_cluster(nid, current - 1)?;
-        } else {
+        if node.start_cluster == crate::fs::EXFAT_CLUSTER_FREE {
             assert_eq!(
                 node.fptr_index, 0,
                 "non-zero pointer index {}",
@@ -390,6 +374,9 @@ impl Exfat {
             allocated = 1;
             // file consists of only one cluster, so it's contiguous
             node.is_contiguous = true;
+        } else {
+            // get the last cluster of the file
+            previous = self.advance_cluster(nid, current - 1)?;
         }
 
         while allocated < difference {
@@ -850,10 +837,7 @@ impl Exfat {
                 for x in entry {
                     log::error!("{x:?}");
                 }
-                log_or_panic!(
-                    format!("unexpected entry type {current:#x} after {previous:#x} at {i}/{n}"),
-                    self.opt.debug
-                );
+                log::error!("unexpected entry type {current:#x} after {previous:#x} at {i}/{n}");
             }
             previous = current.into();
         }
@@ -1008,7 +992,8 @@ impl Exfat {
                         return Ok(*cnid);
                     }
                 }
-                panic!("failed to find cnid for {xname}");
+                log::error!("failed to find cnid for {xname}");
+                return Err(nix::errno::Errno::ENOENT);
             }
         }
         let nid = self.nmap_attach(dnid, node)?;
@@ -1060,7 +1045,7 @@ impl Exfat {
 
     // Read one entry in a directory at offset position and build a new node
     // structure.
-    fn readdir(
+    fn cachedir(
         &mut self,
         dnid: crate::node::Nid,
         offset: u64,
@@ -1084,15 +1069,15 @@ impl Exfat {
                         break 'upcase_label;
                     }
                     let upcase: &crate::fs::ExfatEntryUpcase = bytemuck::cast_ref(entry);
-                    self.readdir_entry_upcase(upcase)?;
+                    self.cachedir_entry_upcase(upcase)?;
                 }
                 crate::fs::EXFAT_ENTRY_BITMAP => {
                     let bitmap: &crate::fs::ExfatEntryBitmap = bytemuck::cast_ref(entry);
-                    self.readdir_entry_bitmap(bitmap)?;
+                    self.cachedir_entry_bitmap(bitmap)?;
                 }
                 crate::fs::EXFAT_ENTRY_LABEL => {
                     let label: &crate::fs::ExfatEntryLabel = bytemuck::cast_ref(entry);
-                    self.readdir_entry_label(label)?;
+                    self.cachedir_entry_label(label)?;
                 }
                 _ => 'default_label: {
                     if (entry.typ & crate::fs::EXFAT_ENTRY_VALID) == 0 {
@@ -1110,7 +1095,7 @@ impl Exfat {
         // we never reach here
     }
 
-    fn readdir_entry_upcase(&mut self, upcase: &crate::fs::ExfatEntryUpcase) -> crate::Result<()> {
+    fn cachedir_entry_upcase(&mut self, upcase: &crate::fs::ExfatEntryUpcase) -> crate::Result<()> {
         if self.cluster_invalid(u32::from_le(upcase.start_cluster)) {
             log::error!(
                 "invalid cluster {:#x} in upcase table",
@@ -1157,7 +1142,7 @@ impl Exfat {
         Ok(())
     }
 
-    fn readdir_entry_bitmap(&mut self, bitmap: &crate::fs::ExfatEntryBitmap) -> crate::Result<()> {
+    fn cachedir_entry_bitmap(&mut self, bitmap: &crate::fs::ExfatEntryBitmap) -> crate::Result<()> {
         self.cmap.start_cluster = u32::from_le(bitmap.start_cluster);
         if self.cluster_invalid(self.cmap.start_cluster) {
             log::error!(
@@ -1196,7 +1181,7 @@ impl Exfat {
         Ok(())
     }
 
-    fn readdir_entry_label(&mut self, label: &crate::fs::ExfatEntryLabel) -> nix::Result<()> {
+    fn cachedir_entry_label(&mut self, label: &crate::fs::ExfatEntryLabel) -> nix::Result<()> {
         if usize::from(label.length) > crate::fs::EXFAT_ENAME_MAX {
             log::error!("too long label ({} chars)", label.length);
             return Err(nix::errno::Errno::EIO);
@@ -1233,7 +1218,7 @@ impl Exfat {
         let mut nids = vec![];
         let mut offset = 0;
         loop {
-            let (nid, next) = match self.readdir(dnid, offset, xname) {
+            let (nid, next) = match self.cachedir(dnid, offset, xname) {
                 Ok(v) => v,
                 Err(e) => {
                     if let crate::Error::Errno(e) = e {
@@ -1244,7 +1229,7 @@ impl Exfat {
                     // relan/exfat rollbacks all nodes in this directory
                     // (not just the ones added now)
                     for nid in &nids {
-                        self.nmap_detach(dnid, *nid);
+                        self.nmap_detach(dnid, *nid)?;
                     }
                     return Err(e);
                 }
@@ -1264,7 +1249,7 @@ impl Exfat {
         mut node: crate::node::Node,
     ) -> nix::Result<crate::node::Nid> {
         assert_eq!(node.nid, crate::node::NID_NONE);
-        node.nid = self.get_nid()?;
+        node.nid = self.alloc_nid()?;
         Ok(self.nmap_attach_node(dnid, node))
     }
 
@@ -1288,38 +1273,42 @@ impl Exfat {
         &mut self,
         dnid: crate::node::Nid,
         nid: crate::node::Nid,
-    ) -> crate::node::Node {
-        let node = self.nmap_detach_node(dnid, nid);
-        self.put_nid(nid);
-        node
+    ) -> nix::Result<crate::node::Node> {
+        let node = self.nmap_detach_node(dnid, nid)?;
+        self.free_nid(nid);
+        Ok(node)
     }
 
     fn nmap_detach_node(
         &mut self,
         dnid: crate::node::Nid,
         nid: crate::node::Nid,
-    ) -> crate::node::Node {
+    ) -> nix::Result<crate::node::Node> {
         assert_ne!(dnid, crate::node::NID_NONE);
         assert_ne!(nid, crate::node::NID_NONE);
         assert_ne!(nid, crate::node::NID_ROOT); // root directly uses nmap
         let dnode = get_node_mut!(self, &dnid);
         if let Some(i) = dnode.cnids.iter().position(|x| *x == nid) {
             dnode.cnids.swap_remove(i);
+            let Some(mut node) = self.nmap.remove(&nid) else {
+                return Err(nix::errno::Errno::ENOENT);
+            };
+            node.pnid = crate::node::NID_NONE; // sanity
+            Ok(node)
+        } else {
+            Err(nix::errno::Errno::ENOENT)
         }
-        let mut node = self.nmap.remove(&nid).unwrap();
-        node.pnid = crate::node::NID_NONE; // sanity
-        node
     }
 
-    fn reset_node(&mut self) {
-        self.reset_node_impl(crate::node::NID_ROOT);
+    fn reset_node(&mut self) -> nix::Result<()> {
+        self.reset_node_impl(crate::node::NID_ROOT)
     }
 
-    fn reset_node_impl(&mut self, nid: crate::node::Nid) {
+    fn reset_node_impl(&mut self, nid: crate::node::Nid) -> nix::Result<()> {
         while !get_node!(self, &nid).cnids.is_empty() {
             let cnid = get_node!(self, &nid).cnids[0];
-            self.reset_node_impl(cnid);
-            self.nmap_detach(nid, cnid);
+            self.reset_node_impl(cnid)?;
+            self.nmap_detach(nid, cnid)?;
         }
         let node = get_node_mut!(self, &nid);
         node.is_cached = false;
@@ -1338,6 +1327,7 @@ impl Exfat {
         while node.references > 0 {
             node.put();
         }
+        Ok(())
     }
 
     /// # Errors
@@ -1501,7 +1491,7 @@ impl Exfat {
 
         let deleted_offset = get_node!(self, &nid).entry_offset;
         // detach node before shrink_directory()
-        let mut node = self.nmap_detach(dnid, nid);
+        let mut node = self.nmap_detach(dnid, nid)?;
         assert!(node.references > 0);
         // can't undirty truncated node via flush_node() after erase
         node.is_dirty = false;
@@ -1743,7 +1733,7 @@ impl Exfat {
 
     /// # Errors
     pub fn mknod(&mut self, path: &str) -> crate::Result<crate::node::Nid> {
-        self.mknod_impl(crate::node::NID_ROOT, &Self::split_path(path))
+        self.mknod_impl(crate::node::NID_ROOT, &crate::util::split_path(path))
     }
 
     /// # Errors
@@ -1773,7 +1763,7 @@ impl Exfat {
 
     /// # Errors
     pub fn mkdir(&mut self, path: &str) -> crate::Result<crate::node::Nid> {
-        self.mkdir_impl(crate::node::NID_ROOT, &Self::split_path(path))
+        self.mkdir_impl(crate::node::NID_ROOT, &crate::util::split_path(path))
     }
 
     /// # Errors
@@ -1870,7 +1860,7 @@ impl Exfat {
         assert!(node.is_valid());
 
         // update pnid / cnids to move nid from old_dnid to new_dnid
-        let node = self.nmap_detach_node(old_dnid, nid);
+        let node = self.nmap_detach_node(old_dnid, nid)?;
         assert_eq!(node.nid, nid);
         Ok(self.nmap_attach_node(new_dnid, node))
     }
@@ -1879,9 +1869,9 @@ impl Exfat {
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> crate::Result<crate::node::Nid> {
         self.rename_impl(
             crate::node::NID_ROOT,
-            &Self::split_path(old_path),
+            &crate::util::split_path(old_path),
             crate::node::NID_ROOT,
-            &Self::split_path(new_path),
+            &crate::util::split_path(new_path),
         )
     }
 
@@ -1936,7 +1926,9 @@ impl Exfat {
 
         if enid != crate::node::NID_NONE {
             // remove target if it's not the same node as source
-            if enid != nid {
+            if enid == nid {
+                get_node_mut!(self, &enid).put();
+            } else {
                 // unlink_rename_target puts enid regardless of result
                 if let Err(e) = self.unlink_rename_target(enid, nid) {
                     // free clusters even if something went wrong; otherwise they
@@ -1945,8 +1937,6 @@ impl Exfat {
                     get_node_mut!(self, &nid).put();
                     return Err(e);
                 }
-            } else {
-                get_node_mut!(self, &enid).put();
             }
         }
 
@@ -2004,7 +1994,10 @@ impl Exfat {
                 Err(nix::errno::Errno::ENOTDIR.into())
             }
         } else if true {
-            if !get_node!(self, &nid).is_directory() {
+            if get_node!(self, &nid).is_directory() {
+                get_node_mut!(self, &enid).put();
+                Err(nix::errno::Errno::EISDIR.into())
+            } else {
                 if let Err(e) = self.unlink(enid) {
                     if let Some(node) = self.nmap.get_mut(&enid) {
                         node.put();
@@ -2012,9 +2005,6 @@ impl Exfat {
                     return Err(e);
                 }
                 Ok(())
-            } else {
-                get_node_mut!(self, &enid).put();
-                Err(nix::errno::Errno::EISDIR.into())
             }
         } else {
             unreachable!();
@@ -2100,13 +2090,13 @@ impl Exfat {
                 c.curnid = dnode.cnids[c.curidx];
             }
         }
-        if c.curnid != crate::node::NID_NONE {
+        if c.curnid == crate::node::NID_NONE {
+            Err(nix::errno::Errno::ENOENT.into())
+        } else {
             let node = get_node_mut!(self, &c.curnid);
             node.get(); // caller needs to put this node
             assert_eq!(node.nid, c.curnid);
             Ok(node.nid)
-        } else {
-            Err(nix::errno::Errno::ENOENT.into())
         }
     }
 
@@ -2115,8 +2105,8 @@ impl Exfat {
     }
 
     fn compare_name(&self, a: &[u16], b: &[u16]) -> bool {
-        assert_ne!(a.len(), 0);
-        assert_ne!(b.len(), 0);
+        assert!(!a.is_empty());
+        assert!(!b.is_empty());
         let mut i = 0;
         while i < a.len() && i < b.len() {
             if !self.compare_name_char(u16::from_le(a[i]), u16::from_le(b[i])) {
@@ -2152,20 +2142,9 @@ impl Exfat {
         }
     }
 
-    fn split_path(path: &str) -> Vec<&str> {
-        let mut v = vec![];
-        for x in &path.trim_matches('/').split('/').collect::<Vec<&str>>() {
-            // multiple /'s between components generates ""
-            if !x.is_empty() && *x != "." {
-                v.push(*x);
-            }
-        }
-        v
-    }
-
     /// # Errors
     pub fn lookup(&mut self, path: &str) -> crate::Result<crate::node::Nid> {
-        self.lookup_impl(crate::node::NID_ROOT, &Self::split_path(path))
+        self.lookup_impl(crate::node::NID_ROOT, &crate::util::split_path(path))
     }
 
     /// # Errors
@@ -2271,7 +2250,7 @@ impl Exfat {
     }
 
     fn ask_to_fix(&self) -> bool {
-        Exfat::ask_to_fix_(&self.opt.repair)
+        Self::ask_to_fix_(&self.opt.repair)
     }
 
     fn ask_to_fix_(repair: &crate::option::RepairMode) -> bool {
@@ -2441,8 +2420,8 @@ impl Exfat {
     /// # Errors
     /// # Panics
     #[allow(clippy::too_many_lines)]
-    pub fn mount(spec: &str, args: &[&str]) -> crate::Result<Exfat> {
-        log::debug!("{args:?}");
+    pub fn mount(spec: &str, args: &[&str]) -> crate::Result<Self> {
+        log::debug!("{spec} {args:?}");
         let opt = crate::option::Opt::new(args)?;
         log::debug!("{opt:?}");
         if let Err(e) = crate::time::tzset() {
@@ -2459,7 +2438,7 @@ impl Exfat {
             }
         };
         log::debug!("{dev:?}");
-        let mut ef = Exfat::new(dev, opt);
+        let mut ef = Self::new(dev, opt);
         if let crate::option::OpenMode::Ro = ef.dev.get_mode() {
             ef.ro = match ef.opt.mode {
                 crate::option::OpenMode::Any => -1, // any option -> ro device
@@ -2541,8 +2520,8 @@ impl Exfat {
         }
 
         // Rust
-        match ef.opt.nidalloc {
-            crate::option::NidAllocMode::Linear => ef.imap.max = crate::node::Nid::MAX - 1,
+        ef.imap.max = match ef.opt.nidalloc {
+            crate::option::NidAllocMode::Linear => crate::node::Nid::MAX - 1,
             crate::option::NidAllocMode::Bitmap => {
                 // n is large enough that cluster allocation should fail first
                 let n = crate::bitmap::round_up(
@@ -2552,9 +2531,9 @@ impl Exfat {
                 log::debug!("imap: {} bits, {} bytes", n, crate::bitmap::size(n));
                 ef.imap.chunk = crate::bitmap::alloc(n);
                 assert_eq!(crate::bitmap::count(&ef.imap.chunk), 0);
-                ef.imap.max = (n - 1).try_into().unwrap();
+                (n - 1).try_into().unwrap()
             }
-        }
+        };
 
         let root = crate::node::Node::new_root();
         assert_eq!(root.nid, crate::node::NID_ROOT);
@@ -2584,21 +2563,21 @@ impl Exfat {
 
         if let Err(e) = ef.cache_directory(nid) {
             get_node_mut!(ef, &nid).put();
-            ef.reset_node();
+            ef.reset_node()?;
             ef.remove_root_node();
             return Err(e);
         }
         if ef.upcase.is_empty() {
             log::error!("upcase table is not found");
             get_node_mut!(ef, &nid).put();
-            ef.reset_node();
+            ef.reset_node()?;
             ef.remove_root_node();
             return Err(nix::errno::Errno::EIO.into());
         }
         if ef.cmap.chunk.is_empty() {
             log::error!("clusters bitmap is not found");
             get_node_mut!(ef, &nid).put();
-            ef.reset_node();
+            ef.reset_node()?;
             ef.remove_root_node();
             return Err(nix::errno::Errno::EIO.into());
         }
@@ -2629,8 +2608,8 @@ impl Exfat {
         self.flush_nodes()?;
         self.flush()?;
         get_node_mut!(self, &crate::node::NID_ROOT).put();
-        self.reset_node();
-        self.dump_node();
+        self.reset_node()?;
+        self.dump_node_all();
         self.remove_root_node();
         self.finalize_super_block()?;
         // Rust
@@ -2702,52 +2681,11 @@ impl Exfat {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn test_exfat_split_path() {
-        assert_eq!(super::Exfat::split_path("").len(), 0);
-
-        assert_eq!(super::Exfat::split_path("/").len(), 0);
-        assert_eq!(super::Exfat::split_path("/.").len(), 0);
-
-        assert_eq!(super::Exfat::split_path("//").len(), 0);
-        assert_eq!(super::Exfat::split_path("//.").len(), 0);
-
-        assert_eq!(super::Exfat::split_path(".").len(), 0);
-        assert_eq!(super::Exfat::split_path("./.").len(), 0);
-
-        assert_eq!(super::Exfat::split_path(" "), [" "]);
-        assert_eq!(super::Exfat::split_path(".."), [".."]);
-        assert_eq!(super::Exfat::split_path("cnp"), ["cnp"]);
-
-        assert_eq!(super::Exfat::split_path("/cnp"), ["cnp"]);
-        assert_eq!(super::Exfat::split_path("//cnp"), ["cnp"]);
-        assert_eq!(super::Exfat::split_path("./cnp"), ["cnp"]);
-
-        assert_eq!(super::Exfat::split_path("cnp/"), ["cnp"]);
-        assert_eq!(super::Exfat::split_path("cnp//"), ["cnp"]);
-        assert_eq!(super::Exfat::split_path("cnp/."), ["cnp"]);
-
-        assert_eq!(super::Exfat::split_path("/cnp/"), ["cnp"]);
-        assert_eq!(super::Exfat::split_path("//cnp//"), ["cnp"]);
-        assert_eq!(super::Exfat::split_path("./cnp/."), ["cnp"]);
-
-        assert_eq!(
-            super::Exfat::split_path("/path/to/cnp"),
-            ["path", "to", "cnp"]
-        );
-        assert_eq!(
-            super::Exfat::split_path("///path///to///cnp///"),
-            ["path", "to", "cnp"]
-        );
-        assert_eq!(
-            super::Exfat::split_path("./path/./to/./cnp/."),
-            ["path", "to", "cnp"]
-        );
-    }
+    use sha2::Digest;
 
     #[allow(unreachable_code)]
     #[test]
-    fn test_ask_to_fix() {
+    fn test_exfat_ask_to_fix() {
         return; // disabled
         loop {
             println!("enter y or Y");
@@ -2759,6 +2697,136 @@ mod tests {
             println!("enter n or N");
             if !super::Exfat::ask_to_fix_(&crate::option::RepairMode::Ask) {
                 break;
+            }
+        }
+    }
+
+    const EXFAT_DEBUG: &str = "EXFAT_DEBUG"; // option
+    const EXFAT_DEVICE: &str = "EXFAT_DEVICE";
+    const EXFAT_PATH: &str = "EXFAT_PATH";
+
+    fn init_std_logger() -> Result<(), log::SetLoggerError> {
+        let env = env_logger::Env::default().filter_or("RUST_LOG", "trace");
+        env_logger::try_init_from_env(env)
+    }
+
+    fn read_all(ef: &mut super::Exfat, nid: crate::node::Nid) -> crate::Result<Vec<u8>> {
+        let st = ef.stat(nid)?;
+        let mut resid = st.st_size;
+        let size = if resid / 10 > 0 { resid / 10 } else { resid };
+        let mut offset = 0;
+        let mut v = vec![];
+        while resid > 0 {
+            let b = ef.preadx(nid, size, offset)?;
+            let n = u64::try_from(b.len()).unwrap();
+            v.extend(b);
+            offset += n;
+            resid -= n;
+        }
+        assert_eq!(ef.preadx(nid, size, offset)?.len(), 0);
+        Ok(v)
+    }
+
+    fn sha256(buf: &[u8]) -> Vec<u8> {
+        let mut h = sha2::Sha256::new();
+        h.update(buf);
+        h.finalize()[..].to_vec()
+    }
+
+    fn test_exfat_path(ef: &mut super::Exfat, f: &str) {
+        log::info!("{f}");
+        match ef.lookup(f) {
+            Ok(nid) => {
+                log::info!("{nid}");
+                match ef.stat(nid) {
+                    Ok(st) => {
+                        log::info!("{st:?}");
+                        match st.st_mode & libc::S_IFMT {
+                            libc::S_IFDIR => match ef.readdir(nid) {
+                                Ok(v) => log::info!("{}: {v:?}", v.len()),
+                                Err(e) => panic!("{e}"),
+                            },
+                            libc::S_IFREG => {
+                                let sum1 = match ef.read_all(nid) {
+                                    Ok(v) => {
+                                        assert_eq!(v.len(), st.st_size.try_into().unwrap());
+                                        match crate::util::bin_to_string(&v) {
+                                            Ok(v) => println!("{v}"),
+                                            Err(e) => panic!("{e}"),
+                                        }
+                                        hex::encode(sha256(&v))
+                                    }
+                                    Err(e) => panic!("{e}"),
+                                };
+                                log::info!("sha256: {sum1}");
+                                let sum2 = match read_all(ef, nid) {
+                                    Ok(v) => {
+                                        assert_eq!(v.len(), st.st_size.try_into().unwrap());
+                                        match crate::util::bin_to_string(&v) {
+                                            Ok(v) => println!("{v}"),
+                                            Err(e) => panic!("{e}"),
+                                        }
+                                        hex::encode(sha256(&v))
+                                    }
+                                    Err(e) => panic!("{e}"),
+                                };
+                                log::info!("sha256: {sum2}");
+                                assert_eq!(sum1, sum2);
+                            }
+                            x => panic!("{x:o}"),
+                        }
+                    }
+                    Err(e) => panic!("{e}"),
+                }
+                get_node_mut!(ef, &nid).put();
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    #[test]
+    fn test_exfat_mount() {
+        if let Ok(spec) = std::env::var(EXFAT_DEVICE) {
+            let _ = init_std_logger();
+            let mut args = vec!["--mode", "ro"];
+            if std::env::var(EXFAT_DEBUG).is_ok() {
+                args.push("--debug");
+            }
+            // mount
+            let mut ef = match super::Exfat::mount(&spec, &args) {
+                Ok(v) => v,
+                Err(e) => panic!("{e}"),
+            };
+            // dump_node
+            ef.dump_node_all();
+            // statfs
+            log::info!("{:?}", ef.statfs());
+            // stat
+            match ef.stat(crate::node::NID_ROOT) {
+                Ok(v) => log::info!("{v:?}"),
+                Err(e) => panic!("{e}"),
+            }
+            // lookup
+            match ef.lookup("/") {
+                Ok(v) => {
+                    assert_eq!(v, crate::node::NID_ROOT);
+                    get_node_mut!(ef, &v).put();
+                }
+                Err(e) => panic!("{e}"),
+            }
+            // read
+            if let Err(e) = ef.preadx(crate::node::NID_ROOT, 1, 0) {
+                panic!("{e}");
+            }
+            // env path
+            if let Ok(f) = std::env::var(EXFAT_PATH) {
+                test_exfat_path(&mut ef, &f);
+            }
+            // dump_node
+            ef.dump_node_all();
+            // unmount
+            if let Err(e) = ef.unmount() {
+                panic!("{e}");
             }
         }
     }
