@@ -1,6 +1,6 @@
 [package]
 name = "libexfat"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -10,6 +10,7 @@ bytemuck = { version = "1.15.0", features = ["derive"] }
 byteorder = "1.5.0"
 getopts = "0.2.21"
 libc = "0.2.155"
+libfs = { git = "https://github.com/kusumi/libfs" }
 log = "0.4.21"
 nix = { version = "0.29.0", features = ["fs", "ioctl", "user"] }
 time = { version = "0.3.36", features = ["local-offset"] }
@@ -18,6 +19,3 @@ time = { version = "0.3.36", features = ["local-offset"] }
 env_logger = "0.11.7"
 hex = "0.4.3"
 sha2 = "0.10.8"
-
-[features]
-bitmap_u64 = []

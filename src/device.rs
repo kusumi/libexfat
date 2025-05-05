@@ -56,7 +56,7 @@ impl Device {
     #[cfg(target_os = "linux")]
     /// # Errors
     pub fn pread(&mut self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
-        crate::util::seek_set(&mut self.fp, offset)?;
+        libfs::fs::seek_set(&mut self.fp, offset)?;
         self.fp.read_exact(buf)
     }
 
@@ -66,7 +66,7 @@ impl Device {
     pub fn pread(&mut self, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
         let (beg, end) = self.get_aligned_range(buf, offset);
         let mut lbuf = vec![0; (end - beg).try_into().unwrap()];
-        crate::util::seek_set(&mut self.fp, beg)?;
+        libfs::fs::seek_set(&mut self.fp, beg)?;
         self.fp.read_exact(&mut lbuf)?;
         let x = (offset - beg).try_into().unwrap();
         buf.copy_from_slice(&lbuf[x..x + buf.len()]);
@@ -76,7 +76,7 @@ impl Device {
     #[cfg(target_os = "linux")]
     /// # Errors
     pub fn pwrite(&mut self, buf: &[u8], offset: u64) -> std::io::Result<()> {
-        crate::util::seek_set(&mut self.fp, offset)?;
+        libfs::fs::seek_set(&mut self.fp, offset)?;
         self.fp.write_all(buf)
     }
 
@@ -86,11 +86,11 @@ impl Device {
     pub fn pwrite(&mut self, buf: &[u8], offset: u64) -> std::io::Result<()> {
         let (beg, end) = self.get_aligned_range(buf, offset);
         let mut lbuf = vec![0; (end - beg).try_into().unwrap()];
-        crate::util::seek_set(&mut self.fp, beg)?;
+        libfs::fs::seek_set(&mut self.fp, beg)?;
         self.fp.read_exact(&mut lbuf)?;
         let x = (offset - beg).try_into().unwrap();
         lbuf[x..x + buf.len()].copy_from_slice(buf);
-        crate::util::seek_set(&mut self.fp, beg)?;
+        libfs::fs::seek_set(&mut self.fp, beg)?;
         self.fp.write_all(&lbuf)
     }
 
@@ -111,17 +111,9 @@ fn is_open(fd: std::os::fd::RawFd) -> bool {
     }
 }
 
-fn open_ro(spec: &str) -> crate::Result<std::fs::File> {
-    Ok(std::fs::File::open(spec)?)
-}
-
 fn open_rw(spec: &str) -> crate::Result<std::fs::File> {
-    let fp = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(spec)?;
-
-    if crate::util::is_linux() {
+    let fp = libfs::fs::open_rw(spec)?;
+    if libfs::os::is_linux() {
         // linux/fs.h:#define BLKROGET   _IO(0x12,94) /* get read-only status (0 = read_write) */
         nix::ioctl_read_bad!(blkroget, 0x125e, u32);
 
@@ -158,13 +150,13 @@ fn open(spec: &str, mode: crate::option::OpenMode) -> crate::Result<Device> {
 
     let (mut fp, mode) = match mode {
         crate::option::OpenMode::Rw => (open_rw(spec)?, mode),
-        crate::option::OpenMode::Ro => (open_ro(spec)?, mode),
+        crate::option::OpenMode::Ro => (libfs::fs::open_ro(spec)?, mode),
         crate::option::OpenMode::Any => {
             if let Ok(v) = open_rw(spec) {
                 (v, crate::option::OpenMode::Rw)
             } else {
                 log::warn!("'{spec}' is write-protected, opening read-only");
-                (open_ro(spec)?, crate::option::OpenMode::Ro)
+                (libfs::fs::open_ro(spec)?, crate::option::OpenMode::Ro)
             }
         }
     };
@@ -175,18 +167,17 @@ fn open(spec: &str, mode: crate::option::OpenMode) -> crate::Result<Device> {
         return Err(nix::errno::Errno::EINVAL.into());
     }
 
-    let size = if crate::util::is_linux() || crate::util::is_freebsd() || crate::util::is_solaris()
-    {
-        let size = crate::util::seek_end(&mut fp, 0)?;
+    let size = if libfs::os::is_linux() || libfs::os::is_freebsd() || libfs::os::is_solaris() {
+        let size = libfs::fs::seek_end(&mut fp, 0)?;
         if size == 0 {
             log::error!("failed to get size of '{spec}'");
             return Err(nix::errno::Errno::EINVAL.into());
         }
-        crate::util::seek_set(&mut fp, 0)?;
+        libfs::fs::seek_set(&mut fp, 0)?;
         size
     } else {
         // XXX other platforms use ioctl(2)
-        log::error!("{} is unsupported", crate::util::get_os_name());
+        log::error!("{} is unsupported", libfs::os::get_name());
         return Err(nix::errno::Errno::EOPNOTSUPP.into());
     };
     Ok(Device {

@@ -1,5 +1,3 @@
-use std::io::Seek;
-
 #[allow(unused_macros)]
 #[macro_export]
 macro_rules! div_round_up {
@@ -134,83 +132,10 @@ pub fn humanize_bytes(value: u64) -> (u64, String) {
     (temp, units[i].to_string())
 }
 
-pub(crate) fn bin_to_string(b: &[u8]) -> Result<String, std::string::FromUtf8Error> {
-    String::from_utf8(
-        match b.iter().position(|&x| x == 0) {
-            Some(v) => &b[..v],
-            None => b,
-        }
-        .to_vec(),
-    )
-}
-
-pub(crate) fn get_current_time() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-}
-
-pub(crate) fn seek_set(fp: &mut std::fs::File, offset: u64) -> std::io::Result<u64> {
-    fp.seek(std::io::SeekFrom::Start(offset))
-}
-
-pub(crate) fn seek_end(fp: &mut std::fs::File, offset: i64) -> std::io::Result<u64> {
-    fp.seek(std::io::SeekFrom::End(offset))
-}
-
-pub(crate) fn split_path(path: &str) -> Vec<&str> {
-    let mut v = vec![];
-    for x in &path.trim_matches('/').split('/').collect::<Vec<&str>>() {
-        // multiple /'s between components generates ""
-        if !x.is_empty() && *x != "." {
-            v.push(*x);
-        }
-    }
-    v
-}
-
 pub(crate) fn read_line() -> std::io::Result<String> {
     let mut s = String::new();
     std::io::stdin().read_line(&mut s)?;
     Ok(s)
-}
-
-// cast [u8] slice to T
-pub(crate) fn align_to<T>(buf: &[u8]) -> &T {
-    let (prefix, body, suffix) = unsafe { buf.align_to::<T>() };
-    assert!(prefix.is_empty());
-    assert!(suffix.is_empty());
-    &body[0]
-}
-
-// cast T to [u8] slice
-pub fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-    unsafe {
-        ::core::slice::from_raw_parts(
-            std::ptr::from_ref::<T>(p).cast::<u8>(),
-            ::core::mem::size_of::<T>(),
-        )
-    }
-}
-
-pub(crate) fn get_os_name() -> &'static str {
-    std::env::consts::OS
-}
-
-#[must_use]
-pub fn is_linux() -> bool {
-    get_os_name() == "linux"
-}
-
-#[must_use]
-pub fn is_freebsd() -> bool {
-    get_os_name() == "freebsd"
-}
-
-#[must_use]
-pub fn is_solaris() -> bool {
-    get_os_name() == "solaris"
 }
 
 #[cfg(test)]
@@ -287,77 +212,5 @@ mod tests {
         let (value, unit) = super::humanize_bytes(1 << 60);
         assert_eq!(value, 1);
         assert_eq!(unit, "EB");
-    }
-
-    #[test]
-    fn test_bin_to_string() {
-        assert_eq!(
-            super::bin_to_string(&[101, 120, 70, 65, 84]),
-            Ok("exFAT".to_string())
-        );
-        assert_eq!(
-            super::bin_to_string(&[101, 120, 70, 65, 84, 0]),
-            Ok("exFAT".to_string())
-        );
-        assert_eq!(
-            super::bin_to_string(&[101, 120, 70, 65, 84, 0, 0]),
-            Ok("exFAT".to_string())
-        );
-
-        assert_eq!(super::bin_to_string(&[0]), Ok(String::new()));
-        assert_eq!(super::bin_to_string(&[0, 0]), Ok(String::new()));
-        assert_eq!(
-            super::bin_to_string(&[0, 0, 101, 120, 70, 65, 84]),
-            Ok(String::new())
-        );
-    }
-
-    #[test]
-    fn test_get_current_time() {
-        let t1 = super::get_current_time();
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        let t2 = super::get_current_time();
-        assert_ne!(t1, t2);
-        assert!(t2 > t1);
-    }
-
-    #[test]
-    fn test_split_path() {
-        assert!(super::split_path("").is_empty());
-
-        assert!(super::split_path("/").is_empty());
-        assert!(super::split_path("/.").is_empty());
-
-        assert!(super::split_path("//").is_empty());
-        assert!(super::split_path("//.").is_empty());
-
-        assert!(super::split_path(".").is_empty());
-        assert!(super::split_path("./.").is_empty());
-
-        assert_eq!(super::split_path(" "), [" "]);
-        assert_eq!(super::split_path(".."), [".."]);
-        assert_eq!(super::split_path("cnp"), ["cnp"]);
-
-        assert_eq!(super::split_path("/cnp"), ["cnp"]);
-        assert_eq!(super::split_path("//cnp"), ["cnp"]);
-        assert_eq!(super::split_path("./cnp"), ["cnp"]);
-
-        assert_eq!(super::split_path("cnp/"), ["cnp"]);
-        assert_eq!(super::split_path("cnp//"), ["cnp"]);
-        assert_eq!(super::split_path("cnp/."), ["cnp"]);
-
-        assert_eq!(super::split_path("/cnp/"), ["cnp"]);
-        assert_eq!(super::split_path("//cnp//"), ["cnp"]);
-        assert_eq!(super::split_path("./cnp/."), ["cnp"]);
-
-        assert_eq!(super::split_path("/path/to/cnp"), ["path", "to", "cnp"]);
-        assert_eq!(
-            super::split_path("///path///to///cnp///"),
-            ["path", "to", "cnp"]
-        );
-        assert_eq!(
-            super::split_path("./path/./to/./cnp/."),
-            ["path", "to", "cnp"]
-        );
     }
 }

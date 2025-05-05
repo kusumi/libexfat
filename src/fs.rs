@@ -460,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn test_struct_any_as_u8_slice() {
+    fn test_struct_as_u8_slice() {
         let mut src = super::ExfatEntryLabel::new();
         assert_eq!(src.typ, 0);
         assert_eq!(src.length, 0);
@@ -486,7 +486,7 @@ mod tests {
             14_u16.to_le(),
         ];
 
-        let dst = crate::util::any_as_u8_slice(&src);
+        let dst = libfs::cast::as_u8_slice(&src);
         assert_eq!(
             dst,
             [

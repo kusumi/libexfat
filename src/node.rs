@@ -159,7 +159,7 @@ impl Node {
         )
         .unwrap();
         assert!(self.strname.is_empty());
-        self.strname = crate::util::bin_to_string(&output).unwrap();
+        self.strname = libfs::string::b2s(&output).unwrap();
     }
 
     pub(crate) fn update_name(&mut self, entries: &[crate::fs::ExfatEntry], n: usize) {
@@ -169,12 +169,12 @@ impl Node {
     }
 
     pub(crate) fn update_atime(&mut self) {
-        self.atime = crate::util::get_current_time();
+        self.atime = libfs::time::get_current().unwrap();
         self.is_dirty = true;
     }
 
     pub(crate) fn update_mtime(&mut self) {
-        self.mtime = crate::util::get_current_time();
+        self.mtime = libfs::time::get_current().unwrap();
         self.is_dirty = true;
     }
 

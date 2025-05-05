@@ -1,6 +1,3 @@
-#[cfg(feature = "bitmap_u64")]
-use byteorder::ByteOrder;
-
 impl crate::fs::ExfatSuperBlock {
     #[must_use]
     pub fn get_sector_size(&self) -> u64 {
@@ -10,35 +7,6 @@ impl crate::fs::ExfatSuperBlock {
     #[must_use]
     pub fn get_cluster_size(&self) -> u64 {
         self.get_sector_size() << self.spc_bits
-    }
-}
-
-impl crate::exfat::ClusterMap {
-    #[cfg(not(feature = "bitmap_u64"))]
-    pub(crate) fn get(&mut self) -> &[u8] {
-        &self.chunk
-    }
-
-    #[cfg(feature = "bitmap_u64")]
-    pub(crate) fn get(&mut self) -> &[u8] {
-        if self.bytes.is_empty() {
-            self.bytes = vec![0; crate::bitmap::size(self.count.try_into().unwrap())];
-        }
-        byteorder::LittleEndian::write_u64_into(&self.chunk, &mut self.bytes);
-        &self.bytes
-    }
-
-    #[cfg(not(feature = "bitmap_u64"))]
-    pub(crate) fn set(&mut self, chunk: Vec<u8>) {
-        self.chunk = chunk;
-    }
-
-    #[cfg(feature = "bitmap_u64")]
-    pub(crate) fn set(&mut self, chunk: Vec<u8>) {
-        if self.chunk.is_empty() {
-            self.chunk = crate::bitmap::alloc(self.count.try_into().unwrap());
-        }
-        byteorder::LittleEndian::read_u64_into(&chunk, &mut self.chunk);
     }
 }
 
@@ -64,7 +32,7 @@ impl crate::exfat::Exfat {
     }
 
     pub(crate) fn init_label(&mut self, b: &[u8]) {
-        self.strlabel = crate::util::bin_to_string(b).unwrap();
+        self.strlabel = libfs::string::b2s(b).unwrap();
     }
 
     #[must_use]
@@ -72,40 +40,40 @@ impl crate::exfat::Exfat {
         &self.strlabel
     }
 
-    pub(crate) fn insert_root_node(&mut self, node: crate::node::Node) {
+    pub(crate) fn insert_root_node(&mut self, node: crate::node::Node) -> nix::Result<()> {
         let nid = node.nid;
         assert_eq!(nid, crate::node::NID_ROOT);
         assert!(self.nmap.is_empty());
         assert!(self.nmap.insert(nid, node).is_none());
         if let crate::option::NidAllocMode::Bitmap = self.opt.nidalloc {
-            self.set_root_nidmap();
+            self.set_root_nidmap()?;
         }
+        Ok(())
     }
 
-    fn set_root_nidmap(&mut self) {
-        assert_eq!(crate::bitmap::count(&self.imap.chunk), 0);
-        crate::bitmap::set(
-            &mut self.imap.chunk,
-            crate::node::NID_ROOT.try_into().unwrap(),
-        );
-        assert_eq!(crate::bitmap::count(&self.imap.chunk), 1);
+    fn set_root_nidmap(&mut self) -> nix::Result<()> {
+        self.imap
+            .chunk
+            .set(crate::node::NID_ROOT.try_into().unwrap())?;
+        assert_eq!(self.imap.chunk.count_is_set_from()?, 1);
+        Ok(())
     }
 
-    pub(crate) fn remove_root_node(&mut self) {
+    pub(crate) fn remove_root_node(&mut self) -> nix::Result<()> {
         assert!(self.nmap.remove(&crate::node::NID_ROOT).is_some());
         assert!(self.nmap.is_empty());
         if let crate::option::NidAllocMode::Bitmap = self.opt.nidalloc {
-            self.clear_root_nidmap();
+            self.clear_root_nidmap()?;
         }
+        Ok(())
     }
 
-    fn clear_root_nidmap(&mut self) {
-        assert_eq!(crate::bitmap::count(&self.imap.chunk), 1);
-        crate::bitmap::clear(
-            &mut self.imap.chunk,
-            crate::node::NID_ROOT.try_into().unwrap(),
-        );
-        assert_eq!(crate::bitmap::count(&self.imap.chunk), 0);
+    fn clear_root_nidmap(&mut self) -> nix::Result<()> {
+        self.imap
+            .chunk
+            .clear(crate::node::NID_ROOT.try_into().unwrap())?;
+        assert_eq!(self.imap.chunk.count_is_set_from()?, 0);
+        Ok(())
     }
 
     pub(crate) fn alloc_node() -> crate::node::Node {
@@ -135,7 +103,7 @@ impl crate::exfat::Exfat {
 
     fn alloc_nidmap_bitmap(&mut self) -> nix::Result<crate::node::Nid> {
         if let Some(v) = self.imap.pool.pop() {
-            crate::bitmap::set(&mut self.imap.chunk, v.try_into().unwrap());
+            self.imap.chunk.set(v.try_into().unwrap())?;
             return Ok(v); // reuse nid in pool
         }
         if self.imap.next > self.imap.max {
@@ -158,19 +126,20 @@ impl crate::exfat::Exfat {
         Ok(nid)
     }
 
-    pub(crate) fn free_nid(&mut self, nid: crate::node::Nid) {
+    pub(crate) fn free_nid(&mut self, nid: crate::node::Nid) -> nix::Result<()> {
         match self.opt.nidalloc {
-            crate::option::NidAllocMode::Linear => (),
+            crate::option::NidAllocMode::Linear => Ok(()),
             crate::option::NidAllocMode::Bitmap => self.free_nidmap_bitmap(nid),
         }
     }
 
-    fn free_nidmap_bitmap(&mut self, nid: crate::node::Nid) {
+    fn free_nidmap_bitmap(&mut self, nid: crate::node::Nid) -> nix::Result<()> {
         const NIDMAP_POOL_MAX: usize = 1 << 8;
-        crate::bitmap::clear(&mut self.imap.chunk, nid.try_into().unwrap());
+        self.imap.chunk.clear(nid.try_into().unwrap())?;
         if self.imap.pool.len() < NIDMAP_POOL_MAX {
             self.imap.pool.push(nid);
         }
+        Ok(())
     }
 
     #[must_use]
@@ -205,17 +174,16 @@ impl crate::exfat::Exfat {
         Ok(())
     }
 
-    #[must_use]
-    pub fn is_cluster_allocated(&self, index: usize) -> bool {
-        crate::bitmap::get(&self.cmap.chunk, index) != 0
+    /// # Errors
+    pub fn is_cluster_allocated(&self, index: usize) -> crate::Result<bool> {
+        Ok(self.cmap.chunk.is_set(index)?)
     }
 
     pub(crate) fn ffas_cluster(&mut self, start: u32, end: u32) -> nix::Result<u32> {
-        let index = crate::bitmap::find_and_set(
-            &mut self.cmap.chunk,
-            start.try_into().unwrap(),
-            end.try_into().unwrap(),
-        );
+        let index = self
+            .cmap
+            .chunk
+            .set_from_range(start.try_into().unwrap(), end.try_into().unwrap())?;
         if index == usize::MAX {
             Err(nix::errno::Errno::ENOSPC)
         } else {
@@ -223,16 +191,15 @@ impl crate::exfat::Exfat {
         }
     }
 
-    pub(crate) fn ffas_nid(
+    fn ffas_nid(
         &mut self,
         start: crate::node::Nid,
         end: crate::node::Nid,
     ) -> nix::Result<crate::node::Nid> {
-        let index = crate::bitmap::find_and_set(
-            &mut self.imap.chunk,
-            start.try_into().unwrap(),
-            end.try_into().unwrap(),
-        );
+        let index = self
+            .imap
+            .chunk
+            .set_from_range(start.try_into().unwrap(), end.try_into().unwrap())?;
         if index == usize::MAX {
             Err(nix::errno::Errno::ENOSPC)
         } else {
@@ -315,7 +282,10 @@ impl crate::exfat::Exfat {
         xnid: crate::node::Nid,
     ) -> nix::Result<()> {
         for &cnid in &crate::exfat::get_node!(self, &nid).cnids.clone() {
+            // if cnid is a caller nid,
             if cnid == xnid {
+                // bail out as busy unless right under root
+                // (don't continue and let caller nid's parent get pruned)
                 if nid != crate::node::NID_ROOT {
                     return Err(nix::errno::Errno::EBUSY);
                 }
@@ -326,6 +296,7 @@ impl crate::exfat::Exfat {
                     self.nmap_detach(nid, cnid)?;
                 }
                 Err(nix::errno::Errno::EBUSY) => {
+                    // propagate busy unless right under root
                     if nid != crate::node::NID_ROOT {
                         return Err(nix::errno::Errno::EBUSY);
                     }

@@ -1,4 +1,3 @@
-pub mod bitmap;
 pub mod ctl;
 pub mod device;
 pub mod exfat;
